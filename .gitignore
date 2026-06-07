@@ -1,0 +1,15 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+
+# Logis Specific
+logis.json
+logs/
+
+# IDEs
+.vs/
+.vscode/
+
+# Documentation (as per existing)
+.docs*

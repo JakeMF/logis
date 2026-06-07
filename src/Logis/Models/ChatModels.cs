@@ -1,27 +1,27 @@
 namespace Logis.Models;
 
-public record ChatRequest(
-    List<ChatMessage> Messages,
+public record LogisRequest(
+    List<LogisMessage> Messages,
     double Temperature,
     int MaxTokens
 );
 
-public record ChatMessage(
+public record LogisMessage(
     string Role,
     string Content
 );
 
-public record ChatResponse(
-    List<Choice> Choices,
-    Usage Usage
+public record LogisResponse(
+    List<LogisChoice> Choices,
+    LogisUsage Usage
 );
 
-public record Choice(
-    ChatMessage Message,
+public record LogisChoice(
+    LogisMessage Message,
     string FinishReason
 );
 
-public record Usage(
+public record LogisUsage(
     int PromptTokens,
     int CompletionTokens,
     int TotalTokens

@@ -1,10 +1,10 @@
 namespace Logis.Models;
 
 public record CompletionResult(
-    ChatRequest Request,
+    LogisRequest Request,
     string Content,
     string RawResponse,
-    Usage Usage,
+    LogisUsage Usage,
     string FinishReason,
     string File,
     string Task

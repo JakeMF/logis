@@ -1,5 +1,10 @@
 namespace Logis;
 
+/// <summary>
+/// Provides a source-generated JSON serialization context for the application's models.
+/// This is required for Native AOT compatibility, as it avoids reflection-based 
+/// deserialization at runtime.
+/// </summary>
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(Logis.Models.LogisRequest))]
 [JsonSerializable(typeof(Logis.Models.LogisMessage))]

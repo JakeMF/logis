@@ -1,5 +1,8 @@
 namespace Logis.Models;
 
+/// <summary>
+/// Represents the persistent application configuration loaded from 'logis.json'.
+/// </summary>
 public record Config(
     [property: JsonPropertyName("default_provider")] string DefaultProvider,
     [property: JsonPropertyName("providers")] Dictionary<string, Provider> Providers,
@@ -7,6 +10,9 @@ public record Config(
     [property: JsonPropertyName("verbose")] bool Verbose
 );
 
+/// <summary>
+/// Defines the connection and model settings for a specific AI provider (e.g., Ollama, OpenAI).
+/// </summary>
 public record Provider(
     [property: JsonPropertyName("base_url")] string BaseUrl,
     [property: JsonPropertyName("model")] string Model,

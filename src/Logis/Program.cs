@@ -16,32 +16,38 @@ class Program
             Description = "The path to the file you want to edit.",
             Required = true 
         };
+        fileOption.AddAlias("-f");
 
         var taskOption = new Option<string>(name: "--task") 
         { 
             Description = "The natural language instruction for the model.",
             Required = true 
         };
+        taskOption.AddAlias("-t");
 
         var modelOption = new Option<string?>(name: "--model") 
         { 
             Description = "Override the model name (e.g., qwen3.5:4b)." 
         };
+        modelOption.AddAlias("-m");
 
         var providerOption = new Option<string?>(name: "--provider") 
         { 
             Description = "Override the provider id from config." 
         };
+        providerOption.AddAlias("-p");
 
         var verboseOption = new Option<bool>(name: "--verbose") 
         { 
             Description = "Print full prompt and raw response to stderr." 
         };
+        verboseOption.AddAlias("-v");
 
         var debugOption = new Option<bool>(name: "--debug") 
         { 
             Description = "Enable debug mode with extra logging." 
         };
+        debugOption.AddAlias("-d");
 
         var rootCommand = new RootCommand("Logis — A learning-focused coding agent harness.")
         {

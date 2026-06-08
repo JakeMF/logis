@@ -53,14 +53,6 @@ class Program
             debugOption
         };
 
-        // Add options individually
-        rootCommand.Options.Add(fileOption);
-        rootCommand.Options.Add(taskOption);
-        rootCommand.Options.Add(modelOption);
-        rootCommand.Options.Add(providerOption);
-        rootCommand.Options.Add(verboseOption);
-        rootCommand.Options.Add(debugOption);
-
         // SetAction replaces SetHandler
         rootCommand.SetAction(async parseResult =>
         {
@@ -161,20 +153,55 @@ class Program
             AnsiConsole.MarkupLine("[bold cyan]--- END OF CHANGES ---[/]");
             AnsiConsole.WriteLine();
 
-            // 6. Interactive Confirmation (v0.2 Destructive Writing)
-            AnsiConsole.Markup($"Apply changes to [bold cyan]{Markup.Escape(file.Name)}[/]? (1: Yes / 2: No): ");
-            
-            char key;
-            while (true)
-            {
-                var keyInfo = Console.ReadKey(intercept: true);
-                key = keyInfo.KeyChar;
-                if (key == '1' || key == '2') break;
-            }
-            Console.WriteLine(key); // Echo the key pressed
-            AnsiConsole.WriteLine();
+            // 6. Interactive Confirmation (v0.3 Smart Prompt)
+            var optionsList = new[] { "1: Yes (Apply)", "2: No (Discard)" };
+            int selectedIndex = 0;
+            string? finalChoice = null;
 
-            if (key == '1')
+            await AnsiConsole.Live(new Text("")).StartAsync(async ctx =>
+            {
+                while (finalChoice == null)
+                {
+                    // Render the prompt
+                    var promptTable = new Table().NoBorder().HideHeaders().AddColumn("Choice");
+                    promptTable.Title = new TableTitle($"Apply changes to [bold cyan]{Markup.Escape(file.Name)}[/]?");
+                    
+                    for (int i = 0; i < optionsList.Length; i++)
+                    {
+                        string prefix = (i == selectedIndex) ? "[bold cyan]> [/]" : "  ";
+                        string style = (i == selectedIndex) ? "bold cyan" : "white";
+                        promptTable.AddRow($"{prefix}[{style}]{optionsList[i]}[/]");
+                    }
+                    
+                    ctx.UpdateTarget(promptTable);
+
+                    // Block and wait for input (0ms latency)
+                    var keyInfo = Console.ReadKey(intercept: true);
+                    
+                    // Hotkey support
+                    if (keyInfo.KeyChar == '1') { finalChoice = optionsList[0]; break; }
+                    if (keyInfo.KeyChar == '2') { finalChoice = optionsList[1]; break; }
+                    
+                    // Navigation support
+                    switch (keyInfo.Key)
+                    {
+                        case ConsoleKey.UpArrow:
+                            selectedIndex = (selectedIndex == 0) ? optionsList.Length - 1 : selectedIndex - 1;
+                            break;
+                        case ConsoleKey.DownArrow:
+                            selectedIndex = (selectedIndex == optionsList.Length - 1) ? 0 : selectedIndex + 1;
+                            break;
+                        case ConsoleKey.Enter:
+                            finalChoice = optionsList[selectedIndex];
+                            break;
+                    }
+                }
+                await Task.CompletedTask;
+            });
+
+            AnsiConsole.WriteLine(); // Clear the live line
+
+            if (finalChoice!.StartsWith("1"))
             {
                 // Overwrite the original file with the model's response
                 workspaceService.WriteFile(file.FullName, result.Content);
@@ -186,8 +213,9 @@ class Program
 
                 // Still print to stdout as a fallback so the user didn't waste the tokens
                 AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[grey]Raw output below:[/]");
-                Console.WriteLine(result.Content);
+                AnsiConsole.MarkupLine("[cyan]Raw output below:[/]");
+                AnsiConsole.Write(new Text(result.Content, new Style(Color.DarkViolet)));
+                AnsiConsole.WriteLine();
             }
         }
         catch (TruncationException ex)

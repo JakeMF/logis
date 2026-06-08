@@ -38,13 +38,19 @@ class Program
             Description = "Print full prompt and raw response to stderr." 
         };
 
+        var debugOption = new Option<bool>(name: "--debug") 
+        { 
+            Description = "Enable debug mode with extra logging." 
+        };
+
         var rootCommand = new RootCommand("Logis — A learning-focused coding agent harness.")
         {
             fileOption,
             taskOption,
             modelOption,
             providerOption,
-            verboseOption
+            verboseOption,
+            debugOption
         };
 
         // Add options individually
@@ -53,6 +59,7 @@ class Program
         rootCommand.Options.Add(modelOption);
         rootCommand.Options.Add(providerOption);
         rootCommand.Options.Add(verboseOption);
+        rootCommand.Options.Add(debugOption);
 
         // SetAction replaces SetHandler
         rootCommand.SetAction(async parseResult =>
@@ -61,9 +68,18 @@ class Program
             var task = parseResult.GetValue(taskOption)!;
             var model = parseResult.GetValue(modelOption);
             var providerId = parseResult.GetValue(providerOption);
-            var verbose = parseResult.GetValue(verboseOption);
+            var verboseOverride = parseResult.GetValue(verboseOption);
+            var debugOverride = parseResult.GetValue(debugOption);
 
-            await ExecuteCompletionAsync(file, task, model, providerId, verbose);
+            var configService = new ConfigService();
+            var config = configService.LoadConfig();
+
+            var options = new LogisOptions(
+                Debug: debugOverride,
+                Verbose: config.Verbose || verboseOverride
+            );
+
+            await ExecuteCompletionAsync(file, task, model, providerId, config, options);
         });
 
         return await rootCommand.Parse(args).InvokeAsync();
@@ -72,23 +88,26 @@ class Program
     /// <summary>
     /// The primary agent loop for a single file completion.
     /// </summary>
-    private static async Task ExecuteCompletionAsync(FileInfo file, string task, string? modelOverride, string? providerOverride, bool verboseOverride)
+    private static async Task ExecuteCompletionAsync(
+        FileInfo file, 
+        string task, 
+        string? modelOverride, 
+        string? providerOverride, 
+        Config config, 
+        LogisOptions options)
     {
-        var configService = new ConfigService();
         var workspaceService = new WorkspaceService();
         var completionService = new CompletionService();
         var loggingService = new LoggingService();
 
-        Config? config = null;
-
         try
         {
-            // 1. Load Configuration
-            config = configService.LoadConfig();
+            if (options.Debug)
+            {
+                AnsiConsole.MarkupLine("[grey]DEBUG: Config loaded, determining provider...[/]");
+            }
 
-            // 2. Apply CLI Overrides
-            if (verboseOverride) config = config with { Verbose = true };
-            
+            // 1. Resolve Provider
             string providerId = providerOverride ?? config.DefaultProvider;
             if (!config.Providers.TryGetValue(providerId, out var providerConfig))
             {
@@ -100,10 +119,19 @@ class Program
                 providerConfig = providerConfig with { Model = modelOverride };
             }
 
-            // 3. Read the Target File
+            if (options.Debug)
+            {
+                AnsiConsole.MarkupLine($"[grey]DEBUG: Using provider '{providerId}' with model '{providerConfig.Model}'[/]");
+            }
+
+            // 2. Read the Target File
+            if (options.Debug)
+            {
+                AnsiConsole.MarkupLine($"[grey]DEBUG: Reading file '{file.FullName}'...[/]");
+            }
             string fileContent = workspaceService.ReadFile(file.FullName);
 
-            // 4. Perform Completion with UI status
+            // 3. Perform Completion with UI status
             // Status messages go to Console.Error to keep Console.Out clean for piping
             CompletionResult result = await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
@@ -112,11 +140,11 @@ class Program
                     return await completionService.CompleteAsync(file.FullName, fileContent, task, providerConfig);
                 });
 
-            // 5. Audit Logging (Always happens regardless of success)
+            // 4. Audit Logging (Always happens regardless of success)
             loggingService.LogRun(result, config);
 
-            // 6. Output Processing
-            if (config.Verbose)
+            // 5. Output Processing
+            if (options.Verbose)
             {
                 // Write verbose metadata to Stderr
                 Console.Error.WriteLine("--- VERBOSE OUTPUT ---");
@@ -132,7 +160,7 @@ class Program
         catch (TruncationException ex)
         {
             // Fail Loudly: Log the partial result before crashing
-            if (config != null) loggingService.LogRun(ex.PartialResult, config);
+            loggingService.LogRun(ex.PartialResult, config);
             
             AnsiConsole.MarkupLine("[bold red]ERROR:[/] Response was truncated (hit token limit).");
             AnsiConsole.MarkupLine("[grey]Try a smaller file or a more specific task.[/]");

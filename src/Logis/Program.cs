@@ -146,16 +146,49 @@ class Program
             // 5. Output Processing
             if (options.Verbose)
             {
-                // Write verbose metadata to Stderr
                 AnsiConsole.MarkupLine("[grey]--- VERBOSE OUTPUT ---[/]");
                 AnsiConsole.MarkupLine($"[grey]Prompt Tokens: {result.Usage.PromptTokens}[/]");
                 AnsiConsole.MarkupLine($"[grey]Completion Tokens: {result.Usage.CompletionTokens}[/]");
                 AnsiConsole.MarkupLine($"[grey]Finish Reason: {result.FinishReason}[/]");
-                AnsiConsole.MarkupLine("[grey]--- VERBOSE OUTPUT ---[/]");
+                AnsiConsole.MarkupLine("[grey]---- END VERBOSE ----[/]");
+                AnsiConsole.WriteLine();
             }
 
-            // The final result goes to Standard Out
-            Console.WriteLine(result.Content);
+            // Show the proposed changes in green for visual review
+            AnsiConsole.MarkupLine("[bold cyan]--- PROPOSED CHANGES ---[/]");
+            AnsiConsole.Write(new Text(result.Content, new Style(Color.Green)));
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[bold cyan]--- END OF CHANGES ---[/]");
+            AnsiConsole.WriteLine();
+
+            // 6. Interactive Confirmation (v0.2 Destructive Writing)
+            AnsiConsole.Markup($"Apply changes to [bold cyan]{Markup.Escape(file.Name)}[/]? (1: Yes / 2: No): ");
+            
+            char key;
+            while (true)
+            {
+                var keyInfo = Console.ReadKey(intercept: true);
+                key = keyInfo.KeyChar;
+                if (key == '1' || key == '2') break;
+            }
+            Console.WriteLine(key); // Echo the key pressed
+            AnsiConsole.WriteLine();
+
+            if (key == '1')
+            {
+                // Overwrite the original file with the model's response
+                workspaceService.WriteFile(file.FullName, result.Content);
+                AnsiConsole.MarkupLine("[bold green]SUCCESS:[/] Changes applied to file.");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[bold yellow]DISCARDED:[/] No changes were made to the disk.");
+
+                // Still print to stdout as a fallback so the user didn't waste the tokens
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[grey]Raw output below:[/]");
+                Console.WriteLine(result.Content);
+            }
         }
         catch (TruncationException ex)
         {

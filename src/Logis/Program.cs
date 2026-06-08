@@ -147,11 +147,11 @@ class Program
             if (options.Verbose)
             {
                 // Write verbose metadata to Stderr
-                Console.Error.WriteLine("--- VERBOSE OUTPUT ---");
-                Console.Error.WriteLine($"Prompt Tokens: {result.Usage.PromptTokens}");
-                Console.Error.WriteLine($"Completion Tokens: {result.Usage.CompletionTokens}");
-                Console.Error.WriteLine($"Finish Reason: {result.FinishReason}");
-                Console.Error.WriteLine();
+                AnsiConsole.MarkupLine("[grey]--- VERBOSE OUTPUT ---[/]");
+                AnsiConsole.MarkupLine($"[grey]Prompt Tokens: {result.Usage.PromptTokens}[/]");
+                AnsiConsole.MarkupLine($"[grey]Completion Tokens: {result.Usage.CompletionTokens}[/]");
+                AnsiConsole.MarkupLine($"[grey]Finish Reason: {result.FinishReason}[/]");
+                AnsiConsole.MarkupLine("[grey]--- VERBOSE OUTPUT ---[/]");
             }
 
             // The final result goes to Standard Out

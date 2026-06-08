@@ -11,5 +11,10 @@ logs/
 .vs/
 .vscode/
 
+# Coding Agents
+GEMINI.md
+.aider*
+
 # Documentation (as per existing)
 .docs*
+

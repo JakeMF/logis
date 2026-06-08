@@ -10,6 +10,10 @@ class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // Force UTF-8 encoding to ensure Unicode characters (like the Dots spinner) 
+        // render correctly in all terminal environments.
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+
         // Define CLI Options
         var fileOption = new Option<FileInfo>(name: "--file", aliases: ["-f"]) 
         { 
@@ -127,6 +131,7 @@ class Program
             // Status messages go to Console.Error to keep Console.Out clean for piping
             CompletionResult result = await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
+                .SpinnerStyle(new Style(Color.BlueViolet))
                 .StartAsync("Thinking...", async ctx =>
                 {
                     return await completionService.CompleteAsync(file.FullName, fileContent, task, providerConfig);

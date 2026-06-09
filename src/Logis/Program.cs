@@ -72,7 +72,8 @@ class Program
 
             var options = new LogisOptions(
                 Debug: debugOverride,
-                Verbose: config.Verbose || verboseOverride
+                Verbose: config.Verbose || verboseOverride,
+                MaxToolIterations: config.MaxToolIterations
             );
 
             await ExecuteCompletionAsync(file, task, model, providerId, config, options);
@@ -134,8 +135,9 @@ class Program
                 .SpinnerStyle(new Style(Color.BlueViolet))
                 .StartAsync("Thinking...", async ctx =>
                 {
-                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerConfig);
+                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerConfig, options, ctx);
                 });
+
 
             // 4. Audit Logging (Always happens regardless of success)
             loggingService.LogRun(result, config);

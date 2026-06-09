@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Spectre.Console;
 
 namespace Logis.Tools;
 
@@ -10,19 +9,16 @@ public class FileSystemTools
 {
     private readonly string _workspaceRoot;
     private readonly string? _targetFilePath;
-    private readonly StatusContext? _statusContext;
     private const long MaxFileSizeBytes = 50 * 1024; // 50KB
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FileSystemTools"/> class.
     /// </summary>
     /// <param name="targetFilePath">The optional path to the file currently being edited.</param>
-    /// <param name="statusContext">Optional Spectre StatusContext for UI updates.</param>
-    public FileSystemTools(string? targetFilePath = null, StatusContext? statusContext = null)
+    public FileSystemTools(string? targetFilePath = null)
     {
         _workspaceRoot = Directory.GetCurrentDirectory();
         _targetFilePath = targetFilePath;
-        _statusContext = statusContext;
     }
 
     /// <summary>
@@ -34,7 +30,6 @@ public class FileSystemTools
     public string ListDirectory(
         [Description("The relative path to the directory to list.")] string path = ".")
     {
-        _statusContext?.Status($"[grey]LOGIS: Listing {Markup.Escape(path)}...[/]");
         try
         {
             string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));
@@ -71,7 +66,6 @@ public class FileSystemTools
     public string ReadFile(
         [Description("The relative path to the file to read.")] string path)
     {
-        _statusContext?.Status($"[grey]LOGIS: Reading {Markup.Escape(path)}...[/]");
         try
         {
             string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));

@@ -1,4 +1,5 @@
 using Logis.Tools;
+using Microsoft.Extensions.AI;
 using OpenAI;
 using System.ClientModel;
 using Spectre.Console;
@@ -40,7 +41,7 @@ public class CompletionService
         LogisOptions options,
         StatusContext? statusContext = null)
     {
-        // 1. Initialize the top-level OpenAI client
+        // 1. Initialize Clients
         var clientOptions = new OpenAIClientOptions();
         if (!string.IsNullOrWhiteSpace(provider.BaseUrl))
         {
@@ -50,16 +51,16 @@ public class CompletionService
         string apiKeyValue = string.IsNullOrWhiteSpace(provider.ApiKey) ? "local-dev" : provider.ApiKey;
         var openAIClient = new OpenAIClient(new ApiKeyCredential(apiKeyValue), clientOptions);
         
-        // 2. Build the ChatClient with Tool Calling Middleware
-        var toolService = new FileSystemTools(filePath, statusContext); 
-        
-        // Use ChatClientBuilder to compose the middleware pipeline
-        using IChatClient chatClient = new ChatClientBuilder(openAIClient.GetChatClient(provider.Model).AsIChatClient())
-            .UseFunctionInvocation(configure: builder =>
-            {
-                builder.MaximumIterationsPerRequest = options.MaxToolIterations;
-            })
-            .Build();
+        // Use raw IChatClient without automatic middleware
+        using IChatClient chatClient = openAIClient.GetChatClient(provider.Model).AsIChatClient();
+
+        // 2. Prepare Tools and State
+        var toolService = new FileSystemTools(filePath); // Tools are now pure
+        var functions = new List<AIFunction>
+        {
+            AIFunctionFactory.Create(toolService.ListDirectory), 
+            AIFunctionFactory.Create(toolService.ReadFile)
+        };
 
         var messages = new List<ChatMessage>
         {
@@ -71,66 +72,136 @@ public class CompletionService
         {
             Temperature = (float)provider.Temperature,
             MaxOutputTokens = provider.MaxTokens,
-            
-            // Limit context window to prevent VRAM bloat (respects num_ctx in Ollama)
             AdditionalProperties = new() { ["num_ctx"] = provider.ContextWindow },
-
-            // Register tools via AIFunctionFactory which uses the [Description] attributes from FileSystemTools
-            Tools = [
-                AIFunctionFactory.Create(toolService.ListDirectory), 
-                AIFunctionFactory.Create(toolService.ReadFile)
-            ]
+            Tools = functions.Cast<AITool>().ToList()
         };
 
         if (options.Debug)
         {
-            AnsiConsole.MarkupLine("[bold yellow]=== DEBUG: PROMPT MESSAGES ===[/]");
-            foreach (var m in messages)
-            {
-                AnsiConsole.MarkupLine($"[blue]{m.Role}:[/] {Markup.Escape(m.Text ?? "[[Complex/Non-text Content]]")}");
-            }
-
-            AnsiConsole.MarkupLine("[bold yellow]=== DEBUG: TOOL DEFINITIONS ===[/]");
-            foreach (var tool in chatOptions.Tools)
-            {
-                // In this version, tools are AIFunctions which expose metadata properties directly
-                AnsiConsole.MarkupLine($"[green]Function:[/] {tool.Name}");
-                AnsiConsole.MarkupLine($"[grey]Description:[/] {Markup.Escape(tool.Description ?? "No description")}");
-            }
-            AnsiConsole.WriteLine();
+            TraceToolDefinitions(functions);
         }
+
+        ChatResponse? lastResponse = null;
+        int iterations = 0;
+        var toolCallHistory = new HashSet<string>();
 
         try
         {
-            // 3. Execute the request
-            // The FunctionInvocationMiddleware will handle the iterative loop of:
-            // Model -> Tool Call -> Tool Execution -> Model -> ... until Stop or MaxIterations
-            ChatResponse response = await chatClient.GetResponseAsync(messages, chatOptions);
+            // 3. Manual Orchestration Loop
+            while (iterations < options.MaxToolIterations)
+            {
+                iterations++;
+                
+                if (options.Debug)
+                {
+                    TraceIteration(iterations, messages.Count);
+                }
 
-            // 4. Capture raw representation for audit logging
-            string rawResponseJson = response.RawRepresentation?.ToString() ?? "Empty raw response";
+                // Hard-Lock Strategy: On the absolute final turn, strip tool access to force a text response.
+                if (iterations == options.MaxToolIterations)
+                {
+                    // Create a tool-less copy of options since ChatOptions is a class
+                    chatOptions = new ChatOptions
+                    {
+                        Temperature = chatOptions.Temperature,
+                        MaxOutputTokens = chatOptions.MaxOutputTokens,
+                        AdditionalProperties = chatOptions.AdditionalProperties,
+                        Tools = null
+                    };
+                    
+                    messages.Add(new ChatMessage(ChatRole.System, "FINAL ATTEMPT: Tool access is now disabled. You MUST propose the final modified file contents based on your research now."));
+                    
+                    if (options.Debug)
+                    {
+                        AnsiConsole.MarkupLine("[bold red]DEBUG: Hard-Lock Engaged (Tools Stripped)[/]");
+                    }
+                }
 
-            // 5. Map the final response back to Logis models
-            var result = new CompletionResult(
+                lastResponse = await chatClient.GetResponseAsync(messages, chatOptions);
+                messages.Add(lastResponse.Messages[0]);
+
+                if (lastResponse.FinishReason != ChatFinishReason.ToolCalls)
+                {
+                    break;
+                }
+
+                // Process Tool Calls
+                foreach (var content in lastResponse.Messages[0].Contents)
+                {
+                    if (content is FunctionCallContent toolCall)
+                    {
+                        var tool = functions.FirstOrDefault(t => t.Name == toolCall.Name);
+                        if (tool != null)
+                        {
+                            string argList = string.Join(", ", toolCall.Arguments?.Select(a => $"{a.Key}: {a.Value}") ?? []);
+                            
+                            // Simple Loop Detection: Prevent the model from calling the same tool with same args twice.
+                            string callKey = $"{toolCall.Name}({argList})";
+                            if (toolCallHistory.Contains(callKey))
+                            {
+                                if (options.Debug)
+                                {
+                                    AnsiConsole.MarkupLine($"[bold red]DEBUG: Loop Detected -> {callKey}[/]");
+                                }
+                                
+                                messages.Add(new ChatMessage(ChatRole.Tool, "Error: Recursive tool call detected. You already have the result for this exact action. DO NOT repeat calls. Propose your final changes now.") 
+                                { 
+                                    Contents = [ new FunctionResultContent(toolCall.CallId, "Error: Recursive call.") ] 
+                                });
+                                continue;
+                            }
+
+                            toolCallHistory.Add(callKey);
+
+                            if (options.Debug)
+                            {
+                                TraceToolCall(toolCall.Name, argList);
+                            }
+                            else
+                            {
+                                statusContext?.Status("[grey]Researching...[/]");
+                            }
+                            
+                            object? result = await tool.InvokeAsync(new AIFunctionArguments(toolCall.Arguments));
+                            
+                            messages.Add(new ChatMessage(ChatRole.Tool, result?.ToString() ?? string.Empty) 
+                            { 
+                                Contents = [ new FunctionResultContent(toolCall.CallId, result?.ToString()) ] 
+                            });
+                        }
+                    }
+                }
+
+                // Loop Hardening: Inject reminder if hitting turn threshold
+                if (iterations >= 3)
+                {
+                    messages.Add(new ChatMessage(ChatRole.System, "Reminder: You have performed multiple research turns. Please prioritize proposing the final modified file now."));
+                }
+            }
+
+            if (lastResponse == null) throw new Exception("Model returned no response.");
+
+            // 4. Final Processing
+            var resultObj = new CompletionResult(
                 Request: MapRequest(messages, chatOptions),
-                Content: response.Text ?? string.Empty,
-                RawResponse: rawResponseJson,
+                Content: lastResponse.Text ?? string.Empty,
+                RawResponse: lastResponse.RawRepresentation?.ToString() ?? "Empty raw response",
                 Usage: new LogisUsage(
-                    PromptTokens: (int)(response.Usage?.InputTokenCount ?? 0),
-                    CompletionTokens: (int)(response.Usage?.OutputTokenCount ?? 0),
-                    TotalTokens: (int)(response.Usage?.TotalTokenCount ?? 0)
+                    PromptTokens: (int)(lastResponse.Usage?.InputTokenCount ?? 0),
+                    CompletionTokens: (int)(lastResponse.Usage?.OutputTokenCount ?? 0),
+                    TotalTokens: (int)(lastResponse.Usage?.TotalTokenCount ?? 0)
                 ),
-                FinishReason: response.FinishReason?.ToString() ?? "unknown",
+                FinishReason: lastResponse.FinishReason?.ToString() ?? "unknown",
                 File: filePath,
                 Task: task
             );
 
-            if (response.FinishReason == ChatFinishReason.Length)
+            if (lastResponse.FinishReason == ChatFinishReason.Length)
             {
-                throw new TruncationException(result);
+                throw new TruncationException(resultObj);
             }
 
-            return result;
+            return resultObj;
         }
         catch (TruncationException) { throw; }
         catch (Exception ex)
@@ -140,8 +211,37 @@ public class CompletionService
     }
 
     /// <summary>
+    /// Dumps the registered tools to the console for debugging.
+    /// </summary>
+    private void TraceToolDefinitions(List<AIFunction> functions)
+    {
+        AnsiConsole.MarkupLine("[bold yellow]=== DEBUG: TOOL DEFINITIONS ===[/]");
+        foreach (var tool in functions)
+        {
+            AnsiConsole.MarkupLine($"[green]Function:[/] {tool.Name}");
+            AnsiConsole.MarkupLine($"[grey]Description:[/] {Markup.Escape(tool.Description ?? "No description")}");
+        }
+        AnsiConsole.WriteLine();
+    }
+
+    /// <summary>
+    /// Prints breadcrumbs for the current iteration of the tool loop.
+    /// </summary>
+    private void TraceIteration(int iteration, int messageCount)
+    {
+        AnsiConsole.MarkupLine($"[grey]DEBUG: Iteration {iteration}, sending {messageCount} messages...[/]");
+    }
+
+    /// <summary>
+    /// Prints a persistent record of a tool call to the console.
+    /// </summary>
+    private void TraceToolCall(string name, string args)
+    {
+        AnsiConsole.MarkupLine($"[grey]DEBUG: Tool Call -> {name}({Markup.Escape(args)})[/]");
+    }
+
+    /// <summary>
     /// Maps the MEA request objects back to our local Logis models for logging.
-    /// Captures multi-turn content including tool calls and results.
     /// </summary>
     private LogisRequest MapRequest(List<ChatMessage> messages, ChatOptions options)
     {

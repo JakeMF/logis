@@ -57,11 +57,13 @@ public class ConfigService
                     Model: "qwen3.5:4b",
                     ApiKey: "",
                     Temperature: 0.3,
-                    MaxTokens: 4096
+                    MaxTokens: 4096,
+                    ContextWindow: 4096
                 )
             },
             LogDir: "logs",
-            Verbose: false
+            Verbose: false,
+            MaxToolIterations: 10
         );
     }
 }

@@ -5,6 +5,8 @@
 
 # Logis Specific
 logis.json
+*.json*
+!logis-example.json
 logs/
 
 # IDEs

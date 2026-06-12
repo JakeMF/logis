@@ -47,6 +47,11 @@ class Program
             Description = "Enable debug mode with extra logging." 
         };
 
+        var editFormatOption = new Option<EditFormat>(name: "--edit-format", aliases: ["-e"])
+        {
+            Description = "The format the model should use to propose changes (Whole file or Search/Replace Diff)."
+        };
+
         var rootCommand = new RootCommand("Logis — A learning-focused coding agent harness.")
         {
             fileOption,
@@ -54,7 +59,8 @@ class Program
             modelOption,
             providerOption,
             verboseOption,
-            debugOption
+            debugOption,
+            editFormatOption
         };
 
         // SetAction replaces SetHandler
@@ -66,6 +72,7 @@ class Program
             var providerId = parseResult.GetValue(providerOption);
             var verboseOverride = parseResult.GetValue(verboseOption);
             var debugOverride = parseResult.GetValue(debugOption);
+            var editFormat = parseResult.GetValue(editFormatOption);
 
             var configService = new ConfigService();
             var config = configService.LoadConfig();
@@ -73,7 +80,8 @@ class Program
             var options = new LogisOptions(
                 Debug: debugOverride,
                 Verbose: config.Verbose || verboseOverride,
-                MaxToolIterations: config.MaxToolIterations
+                MaxToolIterations: config.MaxToolIterations,
+                EditFormat: editFormat
             );
 
             await ExecuteCompletionAsync(file, task, model, providerId, config, options);
@@ -118,13 +126,13 @@ class Program
 
             if (options.Debug)
             {
-                AnsiConsole.MarkupLine($"[grey]DEBUG: Using provider '{providerId}' with model '{providerConfig.Model}'[/]");
+                AnsiConsole.MarkupLine($"[grey]DEBUG: Using provider '{Markup.Escape(providerId)}' with model '{Markup.Escape(providerConfig.Model)}'[/]");
             }
 
             // 2. Read the Target File
             if (options.Debug)
             {
-                AnsiConsole.MarkupLine($"[grey]DEBUG: Reading file '{file.FullName}'...[/]");
+                AnsiConsole.MarkupLine($"[grey]DEBUG: Reading file '{Markup.Escape(file.FullName)}'...[/]");
             }
             string fileContent = workspaceService.ReadFile(file.FullName);
 
@@ -148,17 +156,27 @@ class Program
                 AnsiConsole.MarkupLine("[grey]--- VERBOSE OUTPUT ---[/]");
                 AnsiConsole.MarkupLine($"[grey]Prompt Tokens: {result.Usage.PromptTokens}[/]");
                 AnsiConsole.MarkupLine($"[grey]Completion Tokens: {result.Usage.CompletionTokens}[/]");
-                AnsiConsole.MarkupLine($"[grey]Finish Reason: {result.FinishReason}[/]");
+                AnsiConsole.MarkupLine($"[grey]Finish Reason: {Markup.Escape(result.FinishReason)}[/]");
                 AnsiConsole.MarkupLine("[grey]---- END VERBOSE ----[/]");
                 AnsiConsole.WriteLine();
             }
 
-            // Show the proposed changes in green for visual review
-            AnsiConsole.MarkupLine("[bold cyan]--- PROPOSED CHANGES ---[/]");
-            AnsiConsole.Write(new Text(result.Content, new Style(Color.Green)));
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[bold cyan]--- END OF CHANGES ---[/]");
-            AnsiConsole.WriteLine();
+            var diffService = new DiffService();
+            string finalContent;
+
+            if (options.EditFormat == EditFormat.Diff)
+            {
+                // In Diff mode, result.Content contains Search/Replace blocks.
+                // ApplyEdit parses them, renders a visual diff, and returns the full updated content.
+                finalContent = diffService.ApplyEdit(fileContent, result.Content, file.FullName);
+            }
+            else
+            {
+                // In Whole mode, result.Content is the complete new file.
+                // We render a visual diff between the original and the new content.
+                diffService.RenderDiff(fileContent, result.Content, file.Name);
+                finalContent = result.Content;
+            }
 
             // 6. Interactive Confirmation (v0.3 Smart Prompt)
             var optionsList = new[] { "1: Yes (Apply)", "2: No (Discard)" };
@@ -210,8 +228,8 @@ class Program
 
             if (finalChoice!.StartsWith("1"))
             {
-                // Overwrite the original file with the model's response
-                workspaceService.WriteFile(file.FullName, result.Content);
+                // Overwrite the original file with the final calculated content
+                workspaceService.WriteFile(file.FullName, finalContent);
                 AnsiConsole.MarkupLine("[bold green]SUCCESS:[/] Changes applied to file.");
             }
             else
@@ -220,7 +238,7 @@ class Program
 
                 // Still print to stdout as a fallback so the user didn't waste the tokens
                 AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[cyan]Raw output below:[/]");
+                AnsiConsole.MarkupLine("[cyan]Raw model output below:[/]");
                 AnsiConsole.Write(new Text(result.Content, new Style(Color.DarkViolet)));
                 AnsiConsole.WriteLine();
             }
@@ -236,10 +254,10 @@ class Program
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[bold red]ERROR:[/] {ex.Message}");
+            AnsiConsole.MarkupLine($"[bold red]ERROR:[/] {Markup.Escape(ex.Message)}");
             if (ex.InnerException != null)
             {
-                AnsiConsole.MarkupLine($"[grey]Details: {ex.InnerException.Message}[/]");
+                AnsiConsole.MarkupLine($"[grey]Details: {Markup.Escape(ex.InnerException.Message)}[/]");
             }
             Environment.Exit(1);
         }

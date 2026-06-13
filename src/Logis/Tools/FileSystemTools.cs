@@ -61,10 +61,12 @@ public class FileSystemTools
     /// Reads the content of a file.
     /// </summary>
     /// <param name="path">The relative path to the file to read.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>The file content, or an error message if the file is too large or not found.</returns>
     [Description("Reads the content of a file.")]
-    public string ReadFile(
-        [Description("The relative path to the file to read.")] string path)
+    public async Task<string> ReadFileAsync(
+        [Description("The relative path to the file to read.")] string path,
+        CancellationToken cancellationToken = default)
     {
         try
         {
@@ -100,7 +102,7 @@ public class FileSystemTools
                 return $"Error: File is too large ({fileInfo.Length / 1024}KB). Maximum allowed is 50KB.";
             }
 
-            return File.ReadAllText(fullPath);
+            return await File.ReadAllTextAsync(fullPath, cancellationToken);
         }
         catch (Exception ex)
         {

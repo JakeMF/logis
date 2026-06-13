@@ -11,7 +11,9 @@ public class LoggingService
     /// </summary>
     /// <param name="result">The result of the completion turn.</param>
     /// <param name="config">The current application configuration.</param>
-    public void LogRun(CompletionResult result, Config config)
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task LogRunAsync(CompletionResult result, Config config, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -30,7 +32,7 @@ public class LoggingService
             // Build the log content following the design document's structure
             string logContent = FormatLog(result, config);
 
-            File.WriteAllText(logFilePath, logContent);
+            await File.WriteAllTextAsync(logFilePath, logContent, cancellationToken);
         }
         catch (Exception ex)
         {

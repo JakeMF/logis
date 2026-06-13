@@ -12,9 +12,10 @@ public class ConfigService
     /// Loads the configuration from the local logis.json file.
     /// Falls back to hardcoded defaults if the file is missing.
     /// </summary>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>A validated <see cref="Config"/> record.</returns>
     /// <exception cref="Exception">Thrown if the config exists but is malformed or inaccessible.</exception>
-    public Config LoadConfig()
+    public async Task<Config> LoadConfigAsync(CancellationToken cancellationToken = default)
     {
         // Silently fall back to defaults if no config file is present
         if (!File.Exists(ConfigFileName))
@@ -24,7 +25,7 @@ public class ConfigService
 
         try
         {
-            string json = File.ReadAllText(ConfigFileName);
+            string json = await File.ReadAllTextAsync(ConfigFileName, cancellationToken);
             
             // NOTE: Using the source-generated context here is critical for Native AOT compatibility.
             // This avoids reflection-based deserialization at runtime.

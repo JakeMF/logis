@@ -10,11 +10,12 @@ public class WorkspaceService
     /// Reads the entire content of a file as a string.
     /// </summary>
     /// <param name="path">The relative or absolute path to the file.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>The file contents as a string.</returns>
     /// <exception cref="ArgumentException">Thrown if the path is empty.</exception>
     /// <exception cref="FileNotFoundException">Thrown if the target file does not exist.</exception>
     /// <exception cref="IOException">Thrown if an unexpected error occurs during reading.</exception>
-    public string ReadFile(string path)
+    public async Task<string> ReadFileAsync(string path, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -29,7 +30,7 @@ public class WorkspaceService
 
         try
         {
-            return File.ReadAllText(path);
+            return await File.ReadAllTextAsync(path, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -43,9 +44,10 @@ public class WorkspaceService
     /// </summary>
     /// <param name="path">The path to the file to be overwritten.</param>
     /// <param name="content">The new content to write into the file.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <exception cref="ArgumentException">Thrown if the path is empty.</exception>
     /// <exception cref="IOException">Thrown if an unexpected error occurs during writing.</exception>
-    public void WriteFile(string path, string content)
+    public async Task WriteFileAsync(string path, string content, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -54,7 +56,7 @@ public class WorkspaceService
 
         try
         {
-            File.WriteAllText(path, content);
+            await File.WriteAllTextAsync(path, content, cancellationToken);
         }
         catch (Exception ex)
         {

@@ -40,9 +40,11 @@ public class CompletionService
     /// <param name="filePath">The path to the file (for metadata).</param>
     /// <param name="fileContent">The actual content of the file.</param>
     /// <param name="task">The instruction for the model.</param>
+    /// <param name="providerId">The unique ID of the provider.</param>
     /// <param name="provider">The provider configuration to use.</param>
     /// <param name="options">Runtime options including max tool iterations.</param>
     /// <param name="statusContext">Optional Spectre StatusContext for UI updates.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>A structured <see cref="CompletionResult"/>.</returns>
     /// <exception cref="TruncationException">Thrown if the model hits its token limit.</exception>
     /// <exception cref="Exception">Thrown for API or parsing errors.</exception>
@@ -53,7 +55,8 @@ public class CompletionService
         string providerId,
         Provider provider,
         LogisOptions options,
-        StatusContext? statusContext = null)
+        StatusContext? statusContext = null,
+        CancellationToken cancellationToken = default)
     {
         // 1. Initialize Clients
         var clientOptions = new OpenAIClientOptions();
@@ -73,7 +76,7 @@ public class CompletionService
         var functions = new List<AIFunction>
         {
             AIFunctionFactory.Create(toolService.ListDirectory), 
-            AIFunctionFactory.Create(toolService.ReadFile)
+            AIFunctionFactory.Create(toolService.ReadFileAsync)
         };
 
         string systemPrompt = options.EditFormat == EditFormat.Diff ? DiffSystemPrompt : WholeSystemPrompt;

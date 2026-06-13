@@ -74,8 +74,15 @@ class Program
             var debugOverride = parseResult.GetValue(debugOption);
             var editFormat = parseResult.GetValue(editFormatOption);
 
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (s, e) =>
+            {
+                e.Cancel = true;
+                cts.Cancel();
+            };
+
             var configService = new ConfigService();
-            var config = configService.LoadConfig();
+            var config = await configService.LoadConfigAsync(cts.Token);
 
             var options = new LogisOptions(
                 Debug: debugOverride,
@@ -84,7 +91,7 @@ class Program
                 EditFormat: editFormat
             );
 
-            await ExecuteCompletionAsync(file, task, model, providerId, config, options);
+            return await ExecuteCompletionAsync(file, task, model, providerId, config, options, cts.Token);
         });
 
         return await rootCommand.Parse(args).InvokeAsync();
@@ -93,13 +100,14 @@ class Program
     /// <summary>
     /// The primary agent loop for a single file completion.
     /// </summary>
-    private static async Task ExecuteCompletionAsync(
+    private static async Task<int> ExecuteCompletionAsync(
         FileInfo file, 
         string task, 
         string? modelOverride, 
         string? providerOverride, 
         Config config, 
-        LogisOptions options)
+        LogisOptions options,
+        CancellationToken cancellationToken)
     {
         var workspaceService = new WorkspaceService();
         var completionService = new CompletionService();
@@ -134,7 +142,7 @@ class Program
             {
                 AnsiConsole.MarkupLine($"[grey]DEBUG: Reading file '{Markup.Escape(file.FullName)}'...[/]");
             }
-            string fileContent = workspaceService.ReadFile(file.FullName);
+            string fileContent = await workspaceService.ReadFileAsync(file.FullName, cancellationToken);
 
             // 3. Perform Completion with UI status
             // Status messages go to Console.Error to keep Console.Out clean for piping
@@ -143,12 +151,12 @@ class Program
                 .SpinnerStyle(new Style(Color.BlueViolet))
                 .StartAsync("Thinking...", async ctx =>
                 {
-                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerId, providerConfig, options, ctx);
+                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerId, providerConfig, options, ctx, cancellationToken);
                 });
 
 
             // 4. Audit Logging (Always happens regardless of success)
-            loggingService.LogRun(result, config);
+            await loggingService.LogRunAsync(result, config, cancellationToken);
 
             // 5. Output Processing
             if (options.Verbose)
@@ -187,6 +195,8 @@ class Program
             {
                 while (finalChoice == null)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     // Render the prompt
                     var promptTable = new Table().NoBorder().HideHeaders().AddColumn("Choice");
                     promptTable.Title = new TableTitle($"Apply changes to [bold cyan]{Markup.Escape(file.Name)}[/]?");
@@ -201,6 +211,12 @@ class Program
                     ctx.UpdateTarget(promptTable);
 
                     // Block and wait for input (0ms latency)
+                    if (!Console.KeyAvailable)
+                    {
+                        await Task.Delay(50, cancellationToken);
+                        continue;
+                    }
+
                     var keyInfo = Console.ReadKey(intercept: true);
                     
                     // Hotkey support
@@ -221,7 +237,6 @@ class Program
                             break;
                     }
                 }
-                await Task.CompletedTask;
             });
 
             AnsiConsole.WriteLine(); // Clear the live line
@@ -229,7 +244,7 @@ class Program
             if (finalChoice!.StartsWith("1"))
             {
                 // Overwrite the original file with the final calculated content
-                workspaceService.WriteFile(file.FullName, finalContent);
+                await workspaceService.WriteFileAsync(file.FullName, finalContent, cancellationToken);
                 AnsiConsole.MarkupLine("[bold green]SUCCESS:[/] Changes applied to file.");
             }
             else
@@ -242,15 +257,22 @@ class Program
                 AnsiConsole.Write(new Text(result.Content, new Style(Color.DarkViolet)));
                 AnsiConsole.WriteLine();
             }
+
+            return 0;
         }
         catch (TruncationException ex)
         {
             // Fail Loudly: Log the partial result before crashing
-            loggingService.LogRun(ex.PartialResult, config);
+            await loggingService.LogRunAsync(ex.PartialResult, config, cancellationToken);
             
             AnsiConsole.MarkupLine("[bold red]ERROR:[/] Response was truncated (hit token limit).");
             AnsiConsole.MarkupLine("[grey]Try a smaller file or a more specific task.[/]");
-            Environment.Exit(1);
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            AnsiConsole.MarkupLine("[bold yellow]CANCELLED:[/] Operation was aborted by user.");
+            return 0;
         }
         catch (Exception ex)
         {
@@ -259,7 +281,7 @@ class Program
             {
                 AnsiConsole.MarkupLine($"[grey]Details: {Markup.Escape(ex.InnerException.Message)}[/]");
             }
-            Environment.Exit(1);
+            return 1;
         }
     }
 }

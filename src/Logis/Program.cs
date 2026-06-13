@@ -143,7 +143,7 @@ class Program
                 .SpinnerStyle(new Style(Color.BlueViolet))
                 .StartAsync("Thinking...", async ctx =>
                 {
-                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerConfig, options, ctx);
+                    return await completionService.CompleteAsync(file.FullName, fileContent, task, providerId, providerConfig, options, ctx);
                 });
 
 

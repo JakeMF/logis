@@ -50,6 +50,7 @@ public class CompletionService
         string filePath, 
         string fileContent, 
         string task, 
+        string providerId,
         Provider provider,
         LogisOptions options,
         StatusContext? statusContext = null)
@@ -98,6 +99,7 @@ public class CompletionService
 
         ChatResponse? lastResponse = null;
         int iterations = 0;
+        int totalToolCalls = 0;
         var toolCallHistory = new HashSet<string>();
 
         try
@@ -148,6 +150,7 @@ public class CompletionService
                 {
                     if (content is FunctionCallContent toolCall)
                     {
+                        totalToolCalls++;
                         var tool = functions.FirstOrDefault(t => t.Name == toolCall.Name);
                         if (tool != null)
                         {
@@ -224,7 +227,11 @@ public class CompletionService
                 ),
                 FinishReason: lastResponse.FinishReason?.ToString() ?? "unknown",
                 File: filePath,
-                Task: task
+                Task: task,
+                Model: provider.Model,
+                ProviderId: providerId,
+                EditFormat: options.EditFormat,
+                ToolCallCount: totalToolCalls
             );
 
             if (lastResponse.FinishReason == ChatFinishReason.Length)

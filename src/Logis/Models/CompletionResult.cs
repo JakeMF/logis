@@ -11,5 +11,9 @@ public record CompletionResult(
     LogisUsage Usage,
     string FinishReason,
     string File,
-    string Task
+    string Task,
+    string Model,
+    string ProviderId,
+    EditFormat EditFormat,
+    int ToolCallCount
 );

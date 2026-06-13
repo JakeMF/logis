@@ -47,10 +47,13 @@ public class LoggingService
         var sb = new System.Text.StringBuilder();
 
         sb.AppendLine("=== LOGIS RUN ===");
-        sb.AppendLine($"Timestamp: {DateTime.Now:O}");
-        sb.AppendLine($"File:      {result.File}");
-        sb.AppendLine($"Task:      {result.Task}");
-        sb.AppendLine($"Provider:  {config.DefaultProvider}");
+        sb.AppendLine($"Timestamp:  {DateTime.Now:O}");
+        sb.AppendLine($"File:       {result.File}");
+        sb.AppendLine($"Task:       {result.Task}");
+        sb.AppendLine($"Provider:   {result.ProviderId}");
+        sb.AppendLine($"Model:      {result.Model}");
+        sb.AppendLine($"Edit Mode:  {result.EditFormat}");
+        sb.AppendLine($"Tool Calls: {result.ToolCallCount}");
         sb.AppendLine();
 
         sb.AppendLine("=== REQUEST ===");

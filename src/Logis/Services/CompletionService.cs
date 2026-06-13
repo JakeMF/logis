@@ -12,13 +12,26 @@ namespace Logis.Services;
 /// </summary>
 public class CompletionService
 {
-    private const string SystemPrompt = 
+    private const string WholeSystemPrompt = 
         "You are a helpful assistant that edits code based on user instructions.\n" +
         "You have access to tools to explore the workspace and read other files if needed.\n" +
         "IMPORTANT: You already have the content of the target file. DO NOT call 'ReadFile' on the target file.\n" +
         "When you are ready to propose changes, return the complete modified file only.\n" +
         "Do not wrap your final response in markdown code fences or backticks.\n" +
         "Return only the raw file content with the requested changes applied.";
+
+    private const string DiffSystemPrompt = 
+        "You are a helpful assistant that edits code based on user instructions.\n" +
+        "You have access to tools to explore the workspace and read other files if needed.\n" +
+        "IMPORTANT: You already have the content of the target file. DO NOT call 'ReadFile' on the target file.\n" +
+        "When you are ready to propose changes, return ONLY the specific Search/Replace blocks needed.\n" +
+        "Use the following format for EVERY change:\n" +
+        "[[SEARCH]]\n" +
+        "[exact lines to find]\n" +
+        "[[REPLACE]]\n" +
+        "[replacement lines]\n" +
+        "[[END]]\n" +
+        "If you want to replace the whole file, you can omit [[SEARCH]] and return only [[REPLACE]] and [[END]].";
 
     /// <summary>
     /// Sends the file content and task to the model and returns the result.
@@ -37,6 +50,7 @@ public class CompletionService
         string filePath, 
         string fileContent, 
         string task, 
+        string providerId,
         Provider provider,
         LogisOptions options,
         StatusContext? statusContext = null)
@@ -62,9 +76,11 @@ public class CompletionService
             AIFunctionFactory.Create(toolService.ReadFile)
         };
 
+        string systemPrompt = options.EditFormat == EditFormat.Diff ? DiffSystemPrompt : WholeSystemPrompt;
+
         var messages = new List<ChatMessage>
         {
-            new ChatMessage(ChatRole.System, SystemPrompt),
+            new ChatMessage(ChatRole.System, systemPrompt),
             new ChatMessage(ChatRole.User, $"Target file path: {filePath}\n\nFile contents:\n{fileContent}\n\nTask instruction:\n{task}")
         };
 
@@ -83,6 +99,7 @@ public class CompletionService
 
         ChatResponse? lastResponse = null;
         int iterations = 0;
+        int totalToolCalls = 0;
         var toolCallHistory = new HashSet<string>();
 
         try
@@ -109,8 +126,11 @@ public class CompletionService
                         Tools = null
                     };
                     
-                    messages.Add(new ChatMessage(ChatRole.System, "FINAL ATTEMPT: Tool access is now disabled. You MUST propose the final modified file contents based on your research now."));
-                    
+                    string hardLockMessage = options.EditFormat == EditFormat.Diff
+                        ? "FINAL ATTEMPT: Tool access is now disabled. You MUST return your Search/Replace blocks now. Do not return the whole file."
+                        : "FINAL ATTEMPT: Tool access is now disabled. You MUST propose the final modified file contents based on your research now.";
+                    messages.Add(new ChatMessage(ChatRole.System, hardLockMessage));
+
                     if (options.Debug)
                     {
                         AnsiConsole.MarkupLine("[bold red]DEBUG: Hard-Lock Engaged (Tools Stripped)[/]");
@@ -130,6 +150,7 @@ public class CompletionService
                 {
                     if (content is FunctionCallContent toolCall)
                     {
+                        totalToolCalls++;
                         var tool = functions.FirstOrDefault(t => t.Name == toolCall.Name);
                         if (tool != null)
                         {
@@ -141,7 +162,7 @@ public class CompletionService
                             {
                                 if (options.Debug)
                                 {
-                                    AnsiConsole.MarkupLine($"[bold red]DEBUG: Loop Detected -> {callKey}[/]");
+                                    AnsiConsole.MarkupLine($"[bold red]DEBUG: Loop Detected -> {Markup.Escape(callKey)}[/]");
                                 }
                                 
                                 messages.Add(new ChatMessage(ChatRole.Tool, "Error: Recursive tool call detected. You already have the result for this exact action. DO NOT repeat calls. Propose your final changes now.") 
@@ -175,11 +196,24 @@ public class CompletionService
                 // Loop Hardening: Inject reminder if hitting turn threshold
                 if (iterations >= 3)
                 {
-                    messages.Add(new ChatMessage(ChatRole.System, "Reminder: You have performed multiple research turns. Please prioritize proposing the final modified file now."));
+                    string turnThresholdMessage = options.EditFormat == EditFormat.Diff
+                        ? "Reminder: You have performed multiple research turns. Please prioritize returning your Search/Replace blocks now. Do not return the whole file."
+                        : "Reminder: You have performed multiple research turns. Please prioritize proposing the final modified file now.";
+                    messages.Add(new ChatMessage(ChatRole.System, turnThresholdMessage));
+                    messages.Add(new ChatMessage(ChatRole.System, ""));
                 }
             }
 
             if (lastResponse == null) throw new Exception("Model returned no response.");
+
+            if (options.Debug)
+            {
+                AnsiConsole.MarkupLine($"[yellow]DEBUG: Raw finish reason: {Markup.Escape(lastResponse.FinishReason.ToString() ?? "NULL")}[/]");
+                AnsiConsole.MarkupLine($"[yellow]DEBUG: Text: '{Markup.Escape(lastResponse.Text ?? "NULL")}'[/]");
+                AnsiConsole.MarkupLine($"[yellow]DEBUG: Content blocks: {lastResponse.Messages[0].Contents.Count}[/]");
+                foreach (var c in lastResponse.Messages[0].Contents)
+                    AnsiConsole.MarkupLine($"[yellow]  -> {c.GetType().Name}: {Markup.Escape(c.ToString() ?? "")}[/]");
+            }
 
             // 4. Final Processing
             var resultObj = new CompletionResult(
@@ -193,7 +227,11 @@ public class CompletionService
                 ),
                 FinishReason: lastResponse.FinishReason?.ToString() ?? "unknown",
                 File: filePath,
-                Task: task
+                Task: task,
+                Model: provider.Model,
+                ProviderId: providerId,
+                EditFormat: options.EditFormat,
+                ToolCallCount: totalToolCalls
             );
 
             if (lastResponse.FinishReason == ChatFinishReason.Length)
@@ -218,7 +256,7 @@ public class CompletionService
         AnsiConsole.MarkupLine("[bold yellow]=== DEBUG: TOOL DEFINITIONS ===[/]");
         foreach (var tool in functions)
         {
-            AnsiConsole.MarkupLine($"[green]Function:[/] {tool.Name}");
+            AnsiConsole.MarkupLine($"[green]Function:[/] {Markup.Escape(tool.Name)}");
             AnsiConsole.MarkupLine($"[grey]Description:[/] {Markup.Escape(tool.Description ?? "No description")}");
         }
         AnsiConsole.WriteLine();

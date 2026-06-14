@@ -12,4 +12,8 @@ namespace Logis;
 [JsonSerializable(typeof(Logis.Models.LogisUsage))]
 [JsonSerializable(typeof(Logis.Models.Config))]
 [JsonSerializable(typeof(Logis.Models.CompletionResult))]
+[JsonSerializable(typeof(Logis.Models.SessionTurn))]
+[JsonSerializable(typeof(Logis.Models.SessionState))]
+[JsonSerializable(typeof(Logis.Models.Session))]
+[JsonSerializable(typeof(Logis.Models.WorkingContext))]
 internal partial class LogisJsonContext : JsonSerializerContext { }

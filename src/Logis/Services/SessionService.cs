@@ -162,33 +162,32 @@ public class SessionService
 
                 try
                 {
-                    // We optimize for speed by only reading the first (Identity) and last (State) lines.
-                    // This allows the index to be reconstructed in milliseconds even if there are 
-                    // hundreds of session directories to scan.
-                    var lines = File.ReadLines(jsonlPath);
-                    var firstLine = lines.FirstOrDefault();
-                    var lastLine = lines.LastOrDefault();
+                    // We optimize for speed by reading the file once and grabbing the first/last turns.
+                    var lines = File.ReadLines(jsonlPath).ToList();
 
-                    if (firstLine == null || lastLine == null) continue;
+                    // Guard: We need at least one valid turn to reconstruct the session metadata.
+                    if (lines.Count == 0 || 
+                        JsonSerializer.Deserialize(lines[0], LogisJsonContext.Default.SessionTurn) is not { } firstTurn ||
+                        JsonSerializer.Deserialize(lines[^1], LogisJsonContext.Default.SessionTurn) is not { } lastTurn)
+                    {
+                        if (_options.Debug) Console.Error.WriteLine($"Skipping session at {sessionDir}: Invalid or empty turn data.");
+                        continue;
+                    }
 
-                    var firstTurn = JsonSerializer.Deserialize(firstLine, LogisJsonContext.Default.SessionTurn);
-                    var lastTurn = JsonSerializer.Deserialize(lastLine, LogisJsonContext.Default.SessionTurn);
-
-                    // Reconstruct session from JSONL
                     var session = new Session
                     {
                         Id = firstTurn.SessionId,
                         SessionPath = sessionDir,
                         StartedAt = firstTurn.Timestamp,
                         LastActiveAt = lastTurn.Timestamp,
-                        State = Enum.Parse<SessionState>(lastTurn.StateAtTurn),
+                        // Handle potential state string corruption gracefully.
+                        State = Enum.TryParse<SessionState>(lastTurn.StateAtTurn, out var state) ? state : SessionState.Idle,
                         Context = new WorkingContext
                         {
                             WorkspaceRoot = firstTurn.WorkspaceRoot ?? "Unknown",
                             WorkspaceSlug = Path.GetFileName(slugDir)
                         }
                     };
-
 
                     SaveSessionToIndex(session);
                 }

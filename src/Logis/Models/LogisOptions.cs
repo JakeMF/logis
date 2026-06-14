@@ -13,5 +13,7 @@ public record LogisOptions(
     bool Debug, 
     bool Verbose, 
     int MaxToolIterations, 
-    EditFormat EditFormat = EditFormat.Whole
+    EditFormat EditFormat = EditFormat.Whole,
+    string? SessionId = null,
+    bool SingleShot = false
 );

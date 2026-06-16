@@ -55,11 +55,11 @@ public class ConfigService
             {
                 ["ollama"] = new Provider(
                     BaseUrl: "http://localhost:11434/v1",
-                    Model: "qwen3.5:4b",
+                    Model: "qwen3.5:9b",
                     ApiKey: "",
                     Temperature: 0.3,
-                    MaxTokens: 4096,
-                    ContextWindow: 4096
+                    MaxTokens: 8192,
+                    ContextWindow: 8192
                 )
             },
             LogDir: "logs",

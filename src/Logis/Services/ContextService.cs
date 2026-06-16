@@ -16,23 +16,13 @@ public partial class ContextService
     }
 
     /// <summary>
-    /// Scans user input for file mentions and adds them to the session's focused files.
+    /// Scans user input for file mentions. Note: Files are only added to 
+    /// FocusedFiles after the model successfully reads them via a tool call.
     /// </summary>
     public void ScanForFileMentions(Session session, string input)
     {
-        var matches = FilePathRegex().Matches(input);
-        foreach (Match match in matches)
-        {
-            string path = match.Value;
-            if (!session.Context.FocusedFiles.Contains(path, StringComparer.OrdinalIgnoreCase))
-            {
-                // Verify existence before adding
-                if (File.Exists(Path.Combine(session.Context.WorkspaceRoot, path)))
-                {
-                    session.Context.FocusedFiles.Add(path);
-                }
-            }
-        }
+        // Metadata scanning can still happen here if needed, 
+        // but focusing is now tool-driven for authority.
     }
 
     /// <summary>
@@ -89,6 +79,6 @@ public partial class ContextService
         return Convert.ToHexString(hashBytes);
     }
 
-    [GeneratedRegex(@"(?i)\b[\w\-\.]+\.(cs|js|py|ts|go|json|md|csproj|xml|yml|yaml)\b")]
+    [GeneratedRegex(@"(?i)\b[\w\-\.\\/]+\.[a-z0-9]{1,5}\b")]
     private static partial Regex FilePathRegex();
 }

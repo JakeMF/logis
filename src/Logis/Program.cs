@@ -157,8 +157,55 @@ class Program
         LogisOptions options,
         CancellationToken ct)
     {
-        // Shimming for now until Phase 4 refactor
-        AnsiConsole.MarkupLine("[yellow]Single-shot mode engaged (Phase 4 will refactor this to use sessions).[/]");
+        var sessionService = new SessionService(options);
+        var workspaceService = new WorkspaceService();
+        var contextService = new ContextService(workspaceService, sessionService);
+        var completionService = new CompletionService();
+        var skillService = new SkillService();
+
+        // 1. Create a transient session for this run
+        var session = sessionService.CreateSession(Directory.GetCurrentDirectory());
+        if (!string.IsNullOrEmpty(modelOverride)) session.Model = modelOverride;
+        if (!string.IsNullOrEmpty(providerOverride)) session.Provider = providerOverride;
+        
+        // Single-shot is always an EDIT intent initially
+        session.State = SessionState.Edit;
+        session.Context.FocusedFiles.Add(Path.GetRelativePath(Directory.GetCurrentDirectory(), file.FullName));
+
+        // 2. Persist the User Task
+        var userTurn = new SessionTurn(
+            Id: Guid.NewGuid().ToString("N"),
+            SessionId: session.Id,
+            Role: "user",
+            Content: task,
+            ToolName: null,
+            ToolCallId: null,
+            StateAtTurn: session.State.ToString(),
+            FinishReason: null,
+            TokenCount: null,
+            Iteration: null,
+            IsPinned: false,
+            IsSummary: false,
+            ToolResultPath: null,
+            WorkspaceRoot: session.Context.WorkspaceRoot,
+            Timestamp: DateTime.UtcNow
+        );
+        sessionService.AppendTurn(session, userTurn);
+
+        // 3. Perform Completion
+        CompletionResult result = await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .SpinnerStyle(new Style(Color.BlueViolet))
+            .StartAsync("Thinking...", async ctx =>
+            {
+                return await completionService.CompleteAsync(session, sessionService, contextService, config, options, skillService, ctx, ct);
+            });
+
+        // 4. Handle Edit (Reusing the existing Diff logic from old Program.cs would go here)
+        // For v0.7 infrastructure, we just print the result content.
+        AnsiConsole.Write(new Text(result.Content, new Style(Color.Grey84)));
+        AnsiConsole.WriteLine();
+
         return 0;
     }
 
@@ -174,6 +221,8 @@ class Program
         var stateService = new StateService();
         var workspaceService = new WorkspaceService();
         var contextService = new ContextService(workspaceService, sessionService);
+        var completionService = new CompletionService();
+        var skillService = new SkillService();
 
         Session session;
         if (!string.IsNullOrEmpty(sessionId))
@@ -186,6 +235,9 @@ class Program
             session = sessionService.CreateSession(Directory.GetCurrentDirectory());
             AnsiConsole.MarkupLine($"[bold green]STARTED new session:[/] {session.Id}");
         }
+
+        // Load durable history into memory once at session start
+        await sessionService.LoadHistoryAsync(session, ct);
 
         // We use AnsiConsole for UI and metadata. Standard Console.Out is reserved 
         // for final data output to ensure Logis remains pipe-friendly.
@@ -208,6 +260,7 @@ class Program
 
                     if (!Console.KeyAvailable)
                     {
+                        // High-frequency polling for maximum responsiveness
                         await Task.Delay(20, ct);
                         continue;
                     }
@@ -236,26 +289,108 @@ class Program
 
             if (string.IsNullOrWhiteSpace(input)) continue;
 
-            // Intent detection happens immediately after input to gate the model's 
-            // capability scope (tools/skills) for the upcoming turn.
-            stateService.Transition(session, input);
-            
-            // Proactive context gathering reduces model 'exploration overhead' by loading 
-            // explicitly mentioned files before the model sees the turn.
-            contextService.ScanForFileMentions(session, input);
+            // 1. Intent detection: gates the model's capability scope for the upcoming turn.
+            stateService.Transition(session, input, msg => 
+            {
+                if (options.Debug) AnsiConsole.MarkupLine($"[grey]DEBUG: {Markup.Escape(msg)}[/]");
+            });
+
+            // 2. Persist User Turn (Sync both memory and JSONL)
+            var userMessage = new ChatMessage(ChatRole.User, input);
+            var userTurn = new SessionTurn(
+                Id: Guid.NewGuid().ToString("N"),
+                SessionId: session.Id,
+                Role: "user",
+                Content: input,
+                ToolName: null,
+                ToolCallId: null,
+                StateAtTurn: session.State.ToString(),
+                FinishReason: null,
+                TokenCount: null,
+                Iteration: null,
+                IsPinned: false,
+                IsSummary: false,
+                ToolResultPath: null,
+                WorkspaceRoot: session.Context.WorkspaceRoot,
+                Timestamp: DateTime.UtcNow
+            );
+
+            session.History.Add(userMessage);
+            sessionService.AppendTurn(session, userTurn);
             
             if (options.Debug)
             {
                 AnsiConsole.MarkupLine($"[grey]DEBUG: State transitioned to {session.State}[/]");
-                foreach (var f in session.Context.FocusedFiles)
+            }
+
+            // 4. Perform Completion
+            CompletionResult result = await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .SpinnerStyle(new Style(Color.BlueViolet))
+                .StartAsync("Thinking...", async ctx =>
                 {
-                    AnsiConsole.MarkupLine($"[grey]DEBUG: Focused file: {f}[/]");
+                    return await completionService.CompleteAsync(session, sessionService, contextService, config, options, skillService, ctx, ct);
+                });
+
+            // 5. Output Response & Apply Edits
+            bool handledAsEdit = false;
+            if (session.State == SessionState.Edit)
+            {
+                var diffService = new DiffService();
+                foreach (var relativePath in session.Context.FocusedFiles)
+                {
+                    string fullPath = Path.Combine(session.Context.WorkspaceRoot, relativePath);
+                    if (!File.Exists(fullPath)) continue;
+
+                    try 
+                    {
+                        string original = await File.ReadAllTextAsync(fullPath, ct);
+                        string updated;
+
+                        if (options.EditFormat == EditFormat.Whole)
+                        {
+                            updated = result.Content.Trim();
+                            diffService.RenderDiff(original, updated, relativePath);
+                        }
+                        else
+                        {
+                            updated = diffService.ApplyEdit(original, result.Content, relativePath);
+                        }
+
+                        if (updated != original)
+
+                        {
+                            handledAsEdit = true;
+                            var choice = AnsiConsole.Prompt(
+                                new SelectionPrompt<string>()
+                                    .Title($"[bold yellow]Apply changes to {relativePath}?[/]")
+                                    .AddChoices(new[] { "1: Yes", "2: No" }));
+
+                            if (choice.StartsWith("1"))
+                            {
+                                await File.WriteAllTextAsync(fullPath, updated, ct);
+                                AnsiConsole.MarkupLine($"[green]✔ Applied to {relativePath}[/]");
+                                session.State = SessionState.Review;
+                                sessionService.SaveSessionToIndex(session);
+                            }
+                            else
+                            {
+                                AnsiConsole.MarkupLine("[grey]Changes discarded. You can provide feedback to adjust the proposal.[/]");
+                            }
+                        }
+                    }
+                    catch 
+                    { 
+                        // No blocks for this specific file or match failed, continue to next or fallback to print
+                    }
                 }
             }
 
-            // 3. Completion (Refactored in Phase 4)
-            AnsiConsole.MarkupLine($"[blue]LOGIS:[/] [italic]Transitioning to {session.State}... (Phase 4 will handle the model call here)[/]");
-            AnsiConsole.WriteLine();
+            if (!handledAsEdit)
+            {
+                AnsiConsole.Write(new Text(result.Content, new Style(Color.Grey84)));
+                AnsiConsole.WriteLine();
+            }
         }
 
         return 0;

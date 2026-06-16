@@ -49,6 +49,13 @@ public class Session
     /// The model used in the last turn.
     /// </summary>
     public string? Model { get; set; }
+
+    /// <summary>
+    /// In-memory record of the conversation history for the current resident process.
+    /// The JSONL file remains the durable source of truth across runs.
+    /// </summary>
+    [JsonIgnore]
+    public List<ChatMessage> History { get; } = new();
 }
 
 /// <summary>

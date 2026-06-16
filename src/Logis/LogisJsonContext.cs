@@ -17,3 +17,10 @@ namespace Logis;
 [JsonSerializable(typeof(Logis.Models.Session))]
 [JsonSerializable(typeof(Logis.Models.WorkingContext))]
 internal partial class LogisJsonContext : JsonSerializerContext { }
+
+/// <summary>
+/// Provides a compact (single-line) JSON serialization context for JSONL storage.
+/// </summary>
+[JsonSourceGenerationOptions(WriteIndented = false)]
+[JsonSerializable(typeof(Logis.Models.SessionTurn))]
+internal partial class LogisCompactContext : JsonSerializerContext { }

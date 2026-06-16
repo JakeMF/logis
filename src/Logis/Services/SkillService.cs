@@ -10,13 +10,14 @@ public class SkillService
     /// </summary>
     /// <param name="state">The current state of the session.</param>
     /// <param name="editFormat">The configured edit format (Whole or Diff).</param>
+    /// <param name="focusedFiles">The files currently in the model's focus/memory.</param>
     /// <returns>A string containing behavioral instructions for the model.</returns>
-    public string GetSkill(SessionState state, EditFormat editFormat)
+    public string GetSkill(SessionState state, EditFormat editFormat, IEnumerable<string> focusedFiles)
     {
         return state switch
         {
             SessionState.Research => GetResearchSkill(),
-            SessionState.Edit => GetEditSkill(editFormat),
+            SessionState.Edit => GetEditSkill(editFormat, focusedFiles),
             SessionState.Review => GetReviewSkill(),
             _ => string.Empty
         };
@@ -32,29 +33,34 @@ Explore the workspace to understand the relevant code and architecture.
 - When you have a solid understanding, summarize your findings and wait for instructions.";
     }
 
-    private string GetEditSkill(EditFormat format)
+    private string GetEditSkill(EditFormat format, IEnumerable<string> focusedFiles)
     {
+        var targetList = string.Join(", ", focusedFiles);
+        var baseInstruction = $@"## Skill: Precision Editing
+You are in EDIT mode. You have already researched and have the context for: [{targetList}].
+Your goal is to apply the user's instructions to these files.
+- Do NOT use 'ReadFile' on these files again; you already have their content.
+- If you need to see another file to finish the task, you may still use tools.
+- Maintain existing coding style and conventions.
+- Be surgical; avoid unrelated changes.";
+
         if (format == EditFormat.Diff)
         {
-            return @"## Skill: Precision Editing (Diff Mode)
-You are in EDIT mode. Propose specific changes to the focused files using Search/Replace blocks.
+            return baseInstruction + @"
+- Propose specific changes using Search/Replace blocks.
 - Use the following format for EVERY change:
 [[SEARCH]]
 [exact lines to find]
 [[REPLACE]]
 [replacement lines]
 [[END]]
-- If you want to replace the whole file, you can omit [[SEARCH]] and return only [[REPLACE]] and [[END]].
-- Ensure you maintain existing coding style and conventions.
-- Be surgical; avoid unrelated changes.";
+- If you want to replace the whole file, you can omit [[SEARCH]] and return only [[REPLACE]] and [[END]].";
         }
 
-        return @"## Skill: Precision Editing (Whole File Mode)
-You are in EDIT mode. Propose specific changes to the focused files.
+        return baseInstruction + @"
 - Provide the complete, updated content of the file.
 - Do NOT wrap your final response in markdown code fences or backticks.
-- Return only the raw file content with the requested changes applied.
-- Ensure you maintain existing coding style and conventions.";
+- Return only the raw file content with the requested changes applied.";
     }
 
     private string GetReviewSkill()

@@ -34,221 +34,246 @@ public class CompletionService
         "If you want to replace the whole file, you can omit [[SEARCH]] and return only [[REPLACE]] and [[END]].";
 
     /// <summary>
-    /// Sends the file content and task to the model and returns the result.
-    /// Handles tool calls and multi-turn interaction.
+    /// Sends the current session state to the model and returns the result.
+    /// Handles tool scoping, history reconstruction, and tool result spilling.
     /// </summary>
-    /// <param name="filePath">The path to the file (for metadata).</param>
-    /// <param name="fileContent">The actual content of the file.</param>
-    /// <param name="task">The instruction for the model.</param>
-    /// <param name="providerId">The unique ID of the provider.</param>
-    /// <param name="provider">The provider configuration to use.</param>
-    /// <param name="options">Runtime options including max tool iterations.</param>
-    /// <param name="statusContext">Optional Spectre StatusContext for UI updates.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A structured <see cref="CompletionResult"/>.</returns>
-    /// <exception cref="TruncationException">Thrown if the model hits its token limit.</exception>
-    /// <exception cref="Exception">Thrown for API or parsing errors.</exception>
+    /// <param name="session">The active session.</param>
+    /// <param name="sessionService">Service to persist session history.</param>
+    /// <param name="contextService">Service to assemble workspace context.</param>
+    /// <param name="config">The provider configuration.</param>
+    /// <param name="options">Runtime options.</param>
+    /// <param name="skillService">Service to provide state-specific instructions.</param>
+    /// <param name="statusContext">Optional UI status context.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <summary>
+    /// Sends the current session state to the model and returns the result.
+    /// Uses in-memory session history and implements tool-driven focus tracking.
+    /// </summary>
     public async Task<CompletionResult> CompleteAsync(
-        string filePath, 
-        string fileContent, 
-        string task, 
-        string providerId,
-        Provider provider,
+        Session session,
+        SessionService sessionService,
+        ContextService contextService,
+        Config config,
         LogisOptions options,
+        SkillService skillService,
         StatusContext? statusContext = null,
         CancellationToken cancellationToken = default)
     {
-        // 1. Initialize Clients
-        var clientOptions = new OpenAIClientOptions();
-        if (!string.IsNullOrWhiteSpace(provider.BaseUrl))
+        // 1. Resolve Provider
+        string providerId = session.Provider ?? config.DefaultProvider;
+        if (!config.Providers.TryGetValue(providerId, out var providerConfig))
         {
-            clientOptions.Endpoint = new Uri(provider.BaseUrl);
+            throw new InvalidOperationException($"Provider '{providerId}' not found.");
         }
 
-        string apiKeyValue = string.IsNullOrWhiteSpace(provider.ApiKey) ? "local-dev" : provider.ApiKey;
+        // 2. Initialize Clients
+        var clientOptions = new OpenAIClientOptions();
+        if (!string.IsNullOrWhiteSpace(providerConfig.BaseUrl))
+        {
+            clientOptions.Endpoint = new Uri(providerConfig.BaseUrl);
+        }
+
+        string apiKeyValue = string.IsNullOrWhiteSpace(providerConfig.ApiKey) ? "local-dev" : providerConfig.ApiKey;
         var openAIClient = new OpenAIClient(new ApiKeyCredential(apiKeyValue), clientOptions);
+        using IChatClient chatClient = openAIClient.GetChatClient(providerConfig.Model).AsIChatClient();
+
+        // 3. Prepare System Messages (Injected every turn for current state)
+        string skill = skillService.GetSkill(session.State, options.EditFormat, session.Context.FocusedFiles);
+        string workspaceContext = await contextService.AssembleContextAsync(session, cancellationToken);
         
-        // Use raw IChatClient without automatic middleware
-        using IChatClient chatClient = openAIClient.GetChatClient(provider.Model).AsIChatClient();
-
-        // 2. Prepare Tools and State
-        var toolService = new FileSystemTools(filePath); // Tools are now pure
-        var functions = new List<AIFunction>
+        var promptMessages = new List<ChatMessage>
         {
-            AIFunctionFactory.Create(toolService.ListDirectory), 
-            AIFunctionFactory.Create(toolService.ReadFileAsync)
+            new ChatMessage(ChatRole.System, skill),
+            new ChatMessage(ChatRole.System, workspaceContext)
         };
 
-        string systemPrompt = options.EditFormat == EditFormat.Diff ? DiffSystemPrompt : WholeSystemPrompt;
+        // Prepend system context to the existing conversation history
+        promptMessages.AddRange(session.History);
 
-        var messages = new List<ChatMessage>
+        // 4. Prepare Tools (Scoped by State)
+        var toolService = new FileSystemTools(session.Context.FocusedFiles);
+        var functions = new List<AIFunction>();
+        
+        if (session.State is SessionState.Research or SessionState.Edit)
         {
-            new ChatMessage(ChatRole.System, systemPrompt),
-            new ChatMessage(ChatRole.User, $"Target file path: {filePath}\n\nFile contents:\n{fileContent}\n\nTask instruction:\n{task}")
-        };
+            // Explicit naming ensures consistency between the LLM toolbox and our tracking logic.
+            functions.Add(AIFunctionFactory.Create(toolService.ListDirectory, new AIFunctionFactoryOptions { Name = "ListDirectory" }));
+            functions.Add(AIFunctionFactory.Create(toolService.ReadFileAsync, new AIFunctionFactoryOptions { Name = "ReadFile" }));
+        }
 
         var chatOptions = new ChatOptions
         {
-            Temperature = (float)provider.Temperature,
-            MaxOutputTokens = provider.MaxTokens,
-            AdditionalProperties = new() { ["num_ctx"] = provider.ContextWindow },
+            Temperature = (float)providerConfig.Temperature,
+            MaxOutputTokens = providerConfig.MaxTokens,
+            AdditionalProperties = new() { ["num_ctx"] = providerConfig.ContextWindow },
             Tools = functions.Cast<AITool>().ToList()
         };
 
-        if (options.Debug)
-        {
-            TraceToolDefinitions(functions);
-        }
-
         ChatResponse? lastResponse = null;
         int iterations = 0;
-        int totalToolCalls = 0;
-        var toolCallHistory = new HashSet<string>();
 
-        try
+        // 5. Manual Orchestration Loop
+        while (iterations < options.MaxToolIterations)
         {
-            // 3. Manual Orchestration Loop
-            while (iterations < options.MaxToolIterations)
+            iterations++;
+            
+            lastResponse = await chatClient.GetResponseAsync(promptMessages, chatOptions);
+            
+            // Record assistant response in memory and on disk
+            var assistantTurn = MapToTurn(session, "assistant", lastResponse.Text ?? "[TOOL CALL]", session.State);
+            assistantTurn = assistantTurn with { FinishReason = lastResponse.FinishReason?.ToString() };
+            
+            session.History.Add(lastResponse.Messages[0]);
+            sessionService.AppendTurn(session, assistantTurn);
+            
+            promptMessages.Add(lastResponse.Messages[0]);
+
+            if (lastResponse.FinishReason != ChatFinishReason.ToolCalls)
             {
-                iterations++;
-                
-                if (options.Debug)
-                {
-                    TraceIteration(iterations, messages.Count);
-                }
+                break;
+            }
 
-                // Hard-Lock Strategy: On the absolute final turn, strip tool access to force a text response.
-                if (iterations == options.MaxToolIterations)
+            // Process Tool Calls
+            foreach (var content in lastResponse.Messages[0].Contents)
+            {
+                if (content is FunctionCallContent toolCall)
                 {
-                    // Create a tool-less copy of options since ChatOptions is a class
-                    chatOptions = new ChatOptions
+                    var tool = functions.FirstOrDefault(t => t.Name == toolCall.Name);
+                    if (tool != null)
                     {
-                        Temperature = chatOptions.Temperature,
-                        MaxOutputTokens = chatOptions.MaxOutputTokens,
-                        AdditionalProperties = chatOptions.AdditionalProperties,
-                        Tools = null
-                    };
-                    
-                    string hardLockMessage = options.EditFormat == EditFormat.Diff
-                        ? "FINAL ATTEMPT: Tool access is now disabled. You MUST return your Search/Replace blocks now. Do not return the whole file."
-                        : "FINAL ATTEMPT: Tool access is now disabled. You MUST propose the final modified file contents based on your research now.";
-                    messages.Add(new ChatMessage(ChatRole.System, hardLockMessage));
+                        statusContext?.Status($"[grey]Executing {toolCall.Name}...[/]");
+                        
+                        object? result = await tool.InvokeAsync(new AIFunctionArguments(toolCall.Arguments));
+                        string resultString = result?.ToString() ?? string.Empty;
 
-                    if (options.Debug)
-                    {
-                        AnsiConsole.MarkupLine("[bold red]DEBUG: Hard-Lock Engaged (Tools Stripped)[/]");
-                    }
-                }
-
-                lastResponse = await chatClient.GetResponseAsync(messages, chatOptions);
-                messages.Add(lastResponse.Messages[0]);
-
-                if (lastResponse.FinishReason != ChatFinishReason.ToolCalls)
-                {
-                    break;
-                }
-
-                // Process Tool Calls
-                foreach (var content in lastResponse.Messages[0].Contents)
-                {
-                    if (content is FunctionCallContent toolCall)
-                    {
-                        totalToolCalls++;
-                        var tool = functions.FirstOrDefault(t => t.Name == toolCall.Name);
-                        if (tool != null)
+                        // Tool Authority Focus Tracking: Only focus files after a successful read.
+                        // We check for "ReadFile" which is the explicit name assigned in the factory.
+                        if (toolCall.Name == "ReadFile" && 
+                            !resultString.StartsWith("Error:") && 
+                            toolCall.Arguments is { } args && 
+                            args.TryGetValue("path", out var pathObj) && 
+                            pathObj?.ToString() is string filePath)
                         {
-                            string argList = string.Join(", ", toolCall.Arguments?.Select(a => $"{a.Key}: {a.Value}") ?? []);
-                            
-                            // Simple Loop Detection: Prevent the model from calling the same tool with same args twice.
-                            string callKey = $"{toolCall.Name}({argList})";
-                            if (toolCallHistory.Contains(callKey))
+                            if (!session.Context.FocusedFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                             {
-                                if (options.Debug)
-                                {
-                                    AnsiConsole.MarkupLine($"[bold red]DEBUG: Loop Detected -> {Markup.Escape(callKey)}[/]");
-                                }
-                                
-                                messages.Add(new ChatMessage(ChatRole.Tool, "Error: Recursive tool call detected. You already have the result for this exact action. DO NOT repeat calls. Propose your final changes now.") 
-                                { 
-                                    Contents = [ new FunctionResultContent(toolCall.CallId, "Error: Recursive call.") ] 
-                                });
-                                continue;
+                                session.Context.FocusedFiles.Add(filePath);
+                                sessionService.RecordFileLoad(session.Id, filePath, "unknown", toolCall.CallId);
                             }
-
-                            toolCallHistory.Add(callKey);
-
-                            if (options.Debug)
-                            {
-                                TraceToolCall(toolCall.Name, argList);
-                            }
-                            else
-                            {
-                                statusContext?.Status("[grey]Researching...[/]");
-                            }
-                            
-                            object? result = await tool.InvokeAsync(new AIFunctionArguments(toolCall.Arguments));
-                            
-                            messages.Add(new ChatMessage(ChatRole.Tool, result?.ToString() ?? string.Empty) 
-                            { 
-                                Contents = [ new FunctionResultContent(toolCall.CallId, result?.ToString()) ] 
-                            });
                         }
+
+                        // Handle Spilling for large results (> 50KB)
+                        string? spilledPath = null;
+                        if (resultString.Length > 50 * 1024)
+                        {
+                            string turnId = Guid.NewGuid().ToString("N");
+                            spilledPath = Path.Combine("tool-results", $"{turnId}.txt");
+                            string fullSpilledPath = Path.Combine(session.SessionPath, spilledPath);
+                            await File.WriteAllTextAsync(fullSpilledPath, resultString, cancellationToken);
+                            resultString = $"[TRUNCATED - full result in {spilledPath}]\n" + resultString[..500];
+                        }
+
+                        // Record tool result in memory and on disk
+                        var toolTurn = MapToTurn(session, "tool", resultString, session.State, toolCall.Name, toolCall.CallId);
+                        toolTurn = toolTurn with { ToolResultPath = spilledPath };
+                        
+                        var toolMessage = new ChatMessage(ChatRole.Tool, resultString) 
+                        { 
+                            Contents = [ new FunctionResultContent(toolCall.CallId, resultString) ] 
+                        };
+
+                        session.History.Add(toolMessage);
+                        sessionService.AppendTurn(session, toolTurn);
+                        promptMessages.Add(toolMessage);
                     }
                 }
+            }
+        }
 
-                // Loop Hardening: Inject reminder if hitting turn threshold
-                if (iterations >= 3)
+        if (lastResponse == null) throw new Exception("Model returned no response.");
+
+        return new CompletionResult(
+            Request: MapRequest(promptMessages, chatOptions),
+            Content: lastResponse.Text ?? string.Empty,
+            RawResponse: lastResponse.RawRepresentation?.ToString() ?? "Empty",
+            Usage: new LogisUsage(
+                (int)(lastResponse.Usage?.InputTokenCount ?? 0),
+                (int)(lastResponse.Usage?.OutputTokenCount ?? 0),
+                (int)(lastResponse.Usage?.TotalTokenCount ?? 0)
+            ),
+            FinishReason: lastResponse.FinishReason?.ToString() ?? "unknown",
+            File: "session",
+            Task: "session",
+            Model: providerConfig.Model,
+            ProviderId: providerId,
+            EditFormat: options.EditFormat,
+            ToolCallCount: 0
+        );
+    }
+
+    private async Task<List<ChatMessage>> ReconstructHistoryAsync(Session session, CancellationToken ct)
+    {
+        var messages = new List<ChatMessage>();
+        string jsonlPath = Path.Combine(session.SessionPath, "session.jsonl");
+        if (!File.Exists(jsonlPath)) return messages;
+
+        var lines = await File.ReadAllLinesAsync(jsonlPath, ct);
+        foreach (string line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var turn = JsonSerializer.Deserialize(line, LogisCompactContext.Default.SessionTurn);
+            if (turn == null) continue;
+
+            string content = turn.Content;
+            
+            // If the result was spilled, load the full content
+            if (!string.IsNullOrEmpty(turn.ToolResultPath))
+            {
+                string fullPath = Path.Combine(session.SessionPath, turn.ToolResultPath);
+                if (File.Exists(fullPath))
                 {
-                    string turnThresholdMessage = options.EditFormat == EditFormat.Diff
-                        ? "Reminder: You have performed multiple research turns. Please prioritize returning your Search/Replace blocks now. Do not return the whole file."
-                        : "Reminder: You have performed multiple research turns. Please prioritize proposing the final modified file now.";
-                    messages.Add(new ChatMessage(ChatRole.System, turnThresholdMessage));
-                    messages.Add(new ChatMessage(ChatRole.System, ""));
+                    content = await File.ReadAllTextAsync(fullPath, ct);
                 }
             }
 
-            if (lastResponse == null) throw new Exception("Model returned no response.");
-
-            if (options.Debug)
+            var role = turn.Role.ToLowerInvariant() switch
             {
-                AnsiConsole.MarkupLine($"[yellow]DEBUG: Raw finish reason: {Markup.Escape(lastResponse.FinishReason.ToString() ?? "NULL")}[/]");
-                AnsiConsole.MarkupLine($"[yellow]DEBUG: Text: '{Markup.Escape(lastResponse.Text ?? "NULL")}'[/]");
-                AnsiConsole.MarkupLine($"[yellow]DEBUG: Content blocks: {lastResponse.Messages[0].Contents.Count}[/]");
-                foreach (var c in lastResponse.Messages[0].Contents)
-                    AnsiConsole.MarkupLine($"[yellow]  -> {c.GetType().Name}: {Markup.Escape(c.ToString() ?? "")}[/]");
-            }
+                "user" => ChatRole.User,
+                "assistant" => ChatRole.Assistant,
+                "tool" => ChatRole.Tool,
+                _ => ChatRole.System
+            };
 
-            // 4. Final Processing
-            var resultObj = new CompletionResult(
-                Request: MapRequest(messages, chatOptions),
-                Content: lastResponse.Text ?? string.Empty,
-                RawResponse: lastResponse.RawRepresentation?.ToString() ?? "Empty raw response",
-                Usage: new LogisUsage(
-                    PromptTokens: (int)(lastResponse.Usage?.InputTokenCount ?? 0),
-                    CompletionTokens: (int)(lastResponse.Usage?.OutputTokenCount ?? 0),
-                    TotalTokens: (int)(lastResponse.Usage?.TotalTokenCount ?? 0)
-                ),
-                FinishReason: lastResponse.FinishReason?.ToString() ?? "unknown",
-                File: filePath,
-                Task: task,
-                Model: provider.Model,
-                ProviderId: providerId,
-                EditFormat: options.EditFormat,
-                ToolCallCount: totalToolCalls
-            );
-
-            if (lastResponse.FinishReason == ChatFinishReason.Length)
+            var message = new ChatMessage(role, content);
+            if (role == ChatRole.Tool && !string.IsNullOrEmpty(turn.ToolCallId))
             {
-                throw new TruncationException(resultObj);
+                message.Contents = [ new FunctionResultContent(turn.ToolCallId, content) ];
             }
+            messages.Add(message);
+        }
 
-            return resultObj;
-        }
-        catch (TruncationException) { throw; }
-        catch (Exception ex)
-        {
-            throw new Exception($"Completion failed: {ex.Message}", ex);
-        }
+        return messages;
+    }
+
+    private SessionTurn MapToTurn(Session session, string role, string content, SessionState state, string? toolName = null, string? toolCallId = null)
+    {
+        return new SessionTurn(
+            Id: Guid.NewGuid().ToString("N"),
+            SessionId: session.Id,
+            Role: role.ToLowerInvariant(),
+            Content: content,
+            ToolName: toolName,
+            ToolCallId: toolCallId,
+            StateAtTurn: state.ToString(),
+            FinishReason: null,
+            TokenCount: null,
+            Iteration: null,
+            IsPinned: false,
+            IsSummary: false,
+            ToolResultPath: null,
+            WorkspaceRoot: null,
+            Timestamp: DateTime.UtcNow
+        );
     }
 
     /// <summary>

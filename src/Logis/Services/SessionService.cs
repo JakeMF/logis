@@ -98,6 +98,8 @@ public class SessionService
         };
 
         SaveSessionToIndex(session);
+        // Authority Sync: Load focused files from the metadata index.
+        session.Context.FocusedFiles = GetFocusedFiles(session.Id);
         return session;
     }
 
@@ -116,7 +118,7 @@ public class SessionService
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
 
-        return new Session
+        var session = new Session
         {
             Id = reader.GetString(reader.GetOrdinal("id")),
             DisplayName = reader.IsDBNull(reader.GetOrdinal("display_name")) ? null : reader.GetString(reader.GetOrdinal("display_name")),
@@ -132,6 +134,10 @@ public class SessionService
                 WorkspaceSlug = reader.GetString(reader.GetOrdinal("workspace_slug"))
             }
         };
+
+        // Authority Sync: Load focused files from the metadata index.
+        session.Context.FocusedFiles = GetFocusedFiles(session.Id);
+        return session;
     }
 
     /// <summary>
@@ -163,7 +169,9 @@ public class SessionService
                 try
                 {
                     // We optimize for speed by reading the file once and grabbing the first/last turns.
-                    var lines = File.ReadLines(jsonlPath).ToList();
+                    var lines = File.ReadLines(jsonlPath)
+                        .Where(l => !string.IsNullOrWhiteSpace(l))
+                        .ToList();
 
                     // Guard: We need at least one valid turn to reconstruct the session metadata.
                     if (lines.Count == 0 || 
@@ -204,7 +212,7 @@ public class SessionService
     /// <summary>
     /// Persists session metadata to the SQLite index.
     /// </summary>
-    private void SaveSessionToIndex(Session session)
+    public void SaveSessionToIndex(Session session)
     {
         using var connection = new SqliteConnection($"Data Source={_dbPath}");
         connection.Open();
@@ -238,7 +246,7 @@ public class SessionService
     public void AppendTurn(Session session, SessionTurn turn)
     {
         var jsonlPath = Path.Combine(session.SessionPath, "session.jsonl");
-        var json = JsonSerializer.Serialize(turn, LogisJsonContext.Default.SessionTurn);
+        var json = JsonSerializer.Serialize(turn, LogisCompactContext.Default.SessionTurn);
         File.AppendAllText(jsonlPath, json + Environment.NewLine);
 
         session.LastActiveAt = DateTime.UtcNow;
@@ -301,6 +309,48 @@ public class SessionService
             files.Add(reader.GetString(0));
         }
         return files;
+    }
+
+    /// <summary>
+    /// Populates a session's in-memory history and focused files from its JSONL file.
+    /// Should be called once during session initialization or resumption.
+    /// </summary>
+    public async Task LoadHistoryAsync(Session session, CancellationToken ct)
+    {
+        var jsonlPath = Path.Combine(session.SessionPath, "session.jsonl");
+        if (!File.Exists(jsonlPath)) return;
+
+        var lines = await File.ReadAllLinesAsync(jsonlPath, ct);
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var turn = JsonSerializer.Deserialize(line, LogisCompactContext.Default.SessionTurn);
+            if (turn == null) continue;
+
+            var role = turn.Role.ToLowerInvariant() switch
+            {
+                "user" => ChatRole.User,
+                "assistant" => ChatRole.Assistant,
+                "tool" => ChatRole.Tool,
+                _ => ChatRole.System
+            };
+
+            // Restore focused files from tool metadata
+            if (role == ChatRole.Tool && turn.ToolName == "ReadFileAsync" && !turn.Content.StartsWith("Error:"))
+            {
+                // In v0.7, we'll rely on the ToolCallId or content to infer the path if not explicit.
+                // For now, we restore focus via metadata index during GetSession.
+            }
+
+            var message = new ChatMessage(role, turn.Content);
+            if (role == ChatRole.Tool && !string.IsNullOrEmpty(turn.ToolCallId))
+            {
+                message.Contents = [ new FunctionResultContent(turn.ToolCallId, turn.Content) ];
+            }
+            
+            session.History.Add(message);
+        }
     }
 
     private string SanitizePath(string path)

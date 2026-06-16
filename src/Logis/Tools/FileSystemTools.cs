@@ -8,17 +8,19 @@ namespace Logis.Tools;
 public class FileSystemTools
 {
     private readonly string _workspaceRoot;
-    private readonly string? _targetFilePath;
+    private readonly HashSet<string> _targetFiles;
     private const long MaxFileSizeBytes = 50 * 1024; // 50KB
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FileSystemTools"/> class.
     /// </summary>
-    /// <param name="targetFilePath">The optional path to the file currently being edited.</param>
-    public FileSystemTools(string? targetFilePath = null)
+    /// <param name="targetFiles">The optional collection of files currently being edited/focused.</param>
+    public FileSystemTools(IEnumerable<string>? targetFiles = null)
     {
         _workspaceRoot = Directory.GetCurrentDirectory();
-        _targetFilePath = targetFilePath;
+        _targetFiles = targetFiles != null 
+            ? new HashSet<string>(targetFiles, StringComparer.OrdinalIgnoreCase) 
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -70,18 +72,14 @@ public class FileSystemTools
     {
         try
         {
-            string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));
-
-            // Guard: Prevent the model from reading the file it already has in its prompt.
-            // This prevents "Tool Looping" where the model keeps reading the target file.
-            if (!string.IsNullOrEmpty(_targetFilePath))
+            // Normalize path for lookup in target files
+            string relativePath = path.Replace("/", "\\").TrimStart('\\');
+            if (_targetFiles.Contains(relativePath))
             {
-                string fullTarget = Path.GetFullPath(_targetFilePath);
-                if (fullPath.Equals(fullTarget, StringComparison.OrdinalIgnoreCase))
-                {
-                    return "Error: You already have the content of this file in your message history. DO NOT use ReadFile on the target file again. Propose changes now.";
-                }
+                return $"Error: You already have the content of '{relativePath}' in your message history. DO NOT use ReadFile on target files. Propose your changes using SEARCH/REPLACE blocks now.";
             }
+
+            string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));
 
             // Path Sandboxing: Prevent escaping the workspace root
             if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))

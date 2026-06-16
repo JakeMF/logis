@@ -364,7 +364,6 @@ class Program
                         }
 
                         if (updated != original)
-
                         {
                             handledAsEdit = true;
                             var choice = AnsiConsole.Prompt(

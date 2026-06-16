@@ -12,30 +12,10 @@ namespace Logis.Services;
 /// </summary>
 public class CompletionService
 {
-    private const string WholeSystemPrompt = 
-        "You are a helpful assistant that edits code based on user instructions.\n" +
-        "You have access to tools to explore the workspace and read other files if needed.\n" +
-        "IMPORTANT: You already have the content of the target file. DO NOT call 'ReadFile' on the target file.\n" +
-        "When you are ready to propose changes, return the complete modified file only.\n" +
-        "Do not wrap your final response in markdown code fences or backticks.\n" +
-        "Return only the raw file content with the requested changes applied.";
-
-    private const string DiffSystemPrompt = 
-        "You are a helpful assistant that edits code based on user instructions.\n" +
-        "You have access to tools to explore the workspace and read other files if needed.\n" +
-        "IMPORTANT: You already have the content of the target file. DO NOT call 'ReadFile' on the target file.\n" +
-        "When you are ready to propose changes, return ONLY the specific Search/Replace blocks needed.\n" +
-        "Use the following format for EVERY change:\n" +
-        "[[SEARCH]]\n" +
-        "[exact lines to find]\n" +
-        "[[REPLACE]]\n" +
-        "[replacement lines]\n" +
-        "[[END]]\n" +
-        "If you want to replace the whole file, you can omit [[SEARCH]] and return only [[REPLACE]] and [[END]].";
-
     /// <summary>
     /// Sends the current session state to the model and returns the result.
     /// Handles tool scoping, history reconstruction, and tool result spilling.
+    /// Uses in-memory session history and implements tool-driven focus tracking.
     /// </summary>
     /// <param name="session">The active session.</param>
     /// <param name="sessionService">Service to persist session history.</param>
@@ -45,10 +25,6 @@ public class CompletionService
     /// <param name="skillService">Service to provide state-specific instructions.</param>
     /// <param name="statusContext">Optional UI status context.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <summary>
-    /// Sends the current session state to the model and returns the result.
-    /// Uses in-memory session history and implements tool-driven focus tracking.
-    /// </summary>
     public async Task<CompletionResult> CompleteAsync(
         Session session,
         SessionService sessionService,

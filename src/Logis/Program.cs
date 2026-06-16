@@ -118,7 +118,9 @@ class Program
                 MaxToolIterations: config.MaxToolIterations,
                 EditFormat: editFormat,
                 SessionId: sessionId,
-                SingleShot: singleShot
+                SingleShot: singleShot,
+                ModelOverride: model,
+                ProviderOverride: providerId
             );
 
             try
@@ -165,8 +167,8 @@ class Program
 
         // 1. Create a transient session for this run
         var session = sessionService.CreateSession(Directory.GetCurrentDirectory());
-        if (!string.IsNullOrEmpty(modelOverride)) session.Model = modelOverride;
-        if (!string.IsNullOrEmpty(providerOverride)) session.Provider = providerOverride;
+        if (!string.IsNullOrEmpty(options.ModelOverride)) session.Model = options.ModelOverride;
+        if (!string.IsNullOrEmpty(options.ProviderOverride)) session.Provider = options.ProviderOverride;
         
         // Single-shot is always an EDIT intent initially
         session.State = SessionState.Edit;
@@ -235,6 +237,10 @@ class Program
             session = sessionService.CreateSession(Directory.GetCurrentDirectory());
             AnsiConsole.MarkupLine($"[bold green]STARTED new session:[/] {session.Id}");
         }
+
+        // CLI Overrides take absolute precedence for the current run
+        if (!string.IsNullOrEmpty(options.ModelOverride)) session.Model = options.ModelOverride;
+        if (!string.IsNullOrEmpty(options.ProviderOverride)) session.Provider = options.ProviderOverride;
 
         // Load durable history into memory once at session start
         await sessionService.LoadHistoryAsync(session, ct);

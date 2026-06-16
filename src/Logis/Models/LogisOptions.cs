@@ -15,5 +15,7 @@ public record LogisOptions(
     int MaxToolIterations, 
     EditFormat EditFormat = EditFormat.Diff,
     string? SessionId = null,
-    bool SingleShot = false
+    bool SingleShot = false,
+    string? ModelOverride = null,
+    string? ProviderOverride = null
 );

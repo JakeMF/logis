@@ -75,7 +75,11 @@ public class CompletionService
 
         string apiKeyValue = string.IsNullOrWhiteSpace(providerConfig.ApiKey) ? "local-dev" : providerConfig.ApiKey;
         var openAIClient = new OpenAIClient(new ApiKeyCredential(apiKeyValue), clientOptions);
-        using IChatClient chatClient = openAIClient.GetChatClient(providerConfig.Model).AsIChatClient();
+
+        // Prioritize the model name set on the session (CLI override), 
+        // fallback to the provider's default config.
+        string modelName = session.Model ?? providerConfig.Model;
+        using IChatClient chatClient = openAIClient.GetChatClient(modelName).AsIChatClient();
 
         // 3. Prepare System Messages (Injected every turn for current state)
         string skill = skillService.GetSkill(session.State, options.EditFormat, session.Context.FocusedFiles);

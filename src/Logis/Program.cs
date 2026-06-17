@@ -376,7 +376,7 @@ class Program
                                 await File.WriteAllTextAsync(fullPath, updated, ct);
                                 AnsiConsole.MarkupLine($"[green]✔ Applied to {relativePath}[/]");
                                 session.State = SessionState.Review;
-                                sessionService.SaveSessionToIndex(session);
+                                sessionService.UpdateSessionMetadata(session);
                             }
                             else
                             {

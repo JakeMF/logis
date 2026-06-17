@@ -240,6 +240,33 @@ public class SessionService
     }
 
     /// <summary>
+    /// Updates frequently-changing session metadata in the SQLite index.
+    /// This is more efficient than SaveSessionToIndex for incremental updates.
+    /// </summary>
+    public void UpdateSessionMetadata(Session session)
+    {
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+
+        var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE sessions SET 
+                display_name = $display_name,
+                last_active_at = $last_active_at,
+                state = $state,
+                provider = $provider,
+                model = $model
+            WHERE id = $id";
+        command.Parameters.AddWithValue("$id", session.Id);
+        command.Parameters.AddWithValue("$display_name", (object?)session.DisplayName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$last_active_at", session.LastActiveAt.ToString("O"));
+        command.Parameters.AddWithValue("$state", session.State.ToString());
+        command.Parameters.AddWithValue("$provider", (object?)session.Provider ?? DBNull.Value);
+        command.Parameters.AddWithValue("$model", (object?)session.Model ?? DBNull.Value);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Appends a turn to the session's JSONL file.
     /// This is the primary persistence mechanism for the conversation.
     /// </summary>
@@ -250,7 +277,7 @@ public class SessionService
         File.AppendAllText(jsonlPath, json + Environment.NewLine);
 
         session.LastActiveAt = DateTime.UtcNow;
-        SaveSessionToIndex(session);
+        UpdateSessionMetadata(session);
     }
 
     /// <summary>

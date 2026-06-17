@@ -112,7 +112,12 @@ public class SessionService
         connection.Open();
 
         var command = connection.CreateCommand();
-        command.CommandText = "SELECT * FROM sessions WHERE id = $id";
+        command.CommandText = @"
+            SELECT 
+                id, display_name, session_path, started_at, last_active_at, 
+                state, provider, model, workspace_root, workspace_slug 
+            FROM sessions 
+            WHERE id = $id";
         command.Parameters.AddWithValue("$id", id);
 
         using var reader = command.ExecuteReader();

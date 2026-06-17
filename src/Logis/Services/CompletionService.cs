@@ -190,51 +190,6 @@ public class CompletionService
         );
     }
 
-    private async Task<List<ChatMessage>> ReconstructHistoryAsync(Session session, CancellationToken ct)
-    {
-        var messages = new List<ChatMessage>();
-        string jsonlPath = Path.Combine(session.SessionPath, "session.jsonl");
-        if (!File.Exists(jsonlPath)) return messages;
-
-        var lines = await File.ReadAllLinesAsync(jsonlPath, ct);
-        foreach (string line in lines)
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            var turn = JsonSerializer.Deserialize(line, LogisCompactContext.Default.SessionTurn);
-            if (turn == null) continue;
-
-            string content = turn.Content;
-            
-            // If the result was spilled, load the full content
-            if (!string.IsNullOrEmpty(turn.ToolResultPath))
-            {
-                string fullPath = Path.Combine(session.SessionPath, turn.ToolResultPath);
-                if (File.Exists(fullPath))
-                {
-                    content = await File.ReadAllTextAsync(fullPath, ct);
-                }
-            }
-
-            var role = turn.Role.ToLowerInvariant() switch
-            {
-                "user" => ChatRole.User,
-                "assistant" => ChatRole.Assistant,
-                "tool" => ChatRole.Tool,
-                _ => ChatRole.System
-            };
-
-            var message = new ChatMessage(role, content);
-            if (role == ChatRole.Tool && !string.IsNullOrEmpty(turn.ToolCallId))
-            {
-                message.Contents = [ new FunctionResultContent(turn.ToolCallId, content) ];
-            }
-            messages.Add(message);
-        }
-
-        return messages;
-    }
-
     private SessionTurn MapToTurn(Session session, string role, string content, SessionState state, string? toolName = null, string? toolCallId = null)
     {
         return new SessionTurn(

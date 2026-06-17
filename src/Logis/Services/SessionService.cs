@@ -355,6 +355,19 @@ public class SessionService
             var turn = JsonSerializer.Deserialize(line, LogisCompactContext.Default.SessionTurn);
             if (turn == null) continue;
 
+            var content = turn.Content;
+
+            // Authority: If a result was spilled to disk (large output), we must load the full content
+            // to ensure the LLM has the complete context during session resumption.
+            if (!string.IsNullOrEmpty(turn.ToolResultPath))
+            {
+                var fullPath = Path.Combine(session.SessionPath, turn.ToolResultPath);
+                if (File.Exists(fullPath))
+                {
+                    content = await File.ReadAllTextAsync(fullPath, ct);
+                }
+            }
+
             var role = turn.Role.ToLowerInvariant() switch
             {
                 "user" => ChatRole.User,

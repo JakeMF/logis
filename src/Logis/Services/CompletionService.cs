@@ -224,36 +224,6 @@ public class CompletionService
     }
 
     /// <summary>
-    /// Dumps the registered tools to the console for debugging.
-    /// </summary>
-    private void TraceToolDefinitions(List<AIFunction> functions)
-    {
-        AnsiConsole.MarkupLine("[bold yellow]=== DEBUG: TOOL DEFINITIONS ===[/]");
-        foreach (var tool in functions)
-        {
-            AnsiConsole.MarkupLine($"[green]Function:[/] {Markup.Escape(tool.Name)}");
-            AnsiConsole.MarkupLine($"[grey]Description:[/] {Markup.Escape(tool.Description ?? "No description")}");
-        }
-        AnsiConsole.WriteLine();
-    }
-
-    /// <summary>
-    /// Prints breadcrumbs for the current iteration of the tool loop.
-    /// </summary>
-    private void TraceIteration(int iteration, int messageCount)
-    {
-        AnsiConsole.MarkupLine($"[grey]DEBUG: Iteration {iteration}, sending {messageCount} messages...[/]");
-    }
-
-    /// <summary>
-    /// Prints a persistent record of a tool call to the console.
-    /// </summary>
-    private void TraceToolCall(string name, string args)
-    {
-        AnsiConsole.MarkupLine($"[grey]DEBUG: Tool Call -> {name}({Markup.Escape(args)})[/]");
-    }
-
-    /// <summary>
     /// Maps the MEA request objects back to our local Logis models for logging.
     /// </summary>
     private LogisRequest MapRequest(List<ChatMessage> messages, ChatOptions options)

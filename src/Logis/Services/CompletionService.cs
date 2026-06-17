@@ -251,7 +251,7 @@ public class CompletionService
             IsPinned: false,
             IsSummary: false,
             ToolResultPath: null,
-            WorkspaceRoot: null,
+            WorkspaceRoot: session.Context.WorkspaceRoot,
             Timestamp: DateTime.UtcNow
         );
     }

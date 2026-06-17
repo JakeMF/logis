@@ -101,6 +101,18 @@ public class CompletionService
             
             // Record assistant response in memory and on disk
             var assistantTurn = MapToTurn(session, "assistant", lastResponse.Text ?? "[TOOL CALL]", session.State);
+            
+            // If the assistant is calling a tool, we must persist the tool details in the turn
+            // so we can reconstruct the structured FunctionCallContent during resumption.
+            if (lastResponse.FinishReason == ChatFinishReason.ToolCalls)
+            {
+                var firstCall = lastResponse.Messages[0].Contents.OfType<FunctionCallContent>().FirstOrDefault();
+                if (firstCall != null)
+                {
+                    assistantTurn = assistantTurn with { ToolName = firstCall.Name, ToolCallId = firstCall.CallId };
+                }
+            }
+
             assistantTurn = assistantTurn with { FinishReason = lastResponse.FinishReason?.ToString() };
             
             session.History.Add(lastResponse.Messages[0]);

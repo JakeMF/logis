@@ -383,12 +383,18 @@ public class SessionService
                 // For now, we restore focus via metadata index during GetSession.
             }
 
-            var message = new ChatMessage(role, turn.Content);
+            var message = new ChatMessage(role, content);
             if (role == ChatRole.Tool && !string.IsNullOrEmpty(turn.ToolCallId))
             {
-                message.Contents = [ new FunctionResultContent(turn.ToolCallId, turn.Content) ];
+                message.Contents = [ new FunctionResultContent(turn.ToolCallId, content) ];
             }
-            
+            else if (role == ChatRole.Assistant && !string.IsNullOrEmpty(turn.ToolCallId))
+            {
+                // Reconstruct the structured FunctionCallContent for assistant turns.
+                // This ensures the LLM sees the Call -> Result pair correctly during resumption.
+                message.Contents = [ new FunctionCallContent(turn.ToolCallId, turn.ToolName ?? "Unknown") ];
+            }
+
             session.History.Add(message);
         }
     }

@@ -311,80 +311,71 @@ public class InputBar
         string content = _input.ToString();
         int totalChars = promptLen + content.Length;
 
-        // --- Step 4.2: Visual Block Configuration ---
-        ConsoleColor blockBg = ConsoleColor.DarkGray;
-        ConsoleColor separatorColor = ConsoleColor.DarkGray;
+        // --- Single-Buffer Assembly ---
+        // Building the entire frame in memory eliminates flicker by sending 
+        // a single packet to the terminal emulator.
+        var sb = new StringBuilder();
 
-        // 0. Reset & Wipe (The "Canvas Prep")
-        // If we have a previous frame, we move to its top and CLEAR the entire height.
-        // This prevents "ghost" lines when the input wraps/unwraps or is deleted.
+        // 0. Hide Cursor during redraw to prevent "dancing cursor" artifacts
+        sb.Append("\x1b[?25l");
+
+        // 1. Reset & Wipe (The "Canvas Prep")
         if (_lastInputLines >= 0)
         {
-            // Move back to the separator line
-            for (int i = 0; i < _lastCursorLine + 1; i++) Console.Write("\x1b[A");
+            // Move back to the separator line from current typing position
+            for (int i = 0; i < _lastCursorLine + 1; i++) sb.Append("\x1b[A");
             
             // Wipe the entire vertical span of the previous UI block
-            // Height = Separator(1) + Input(_lastInputLines+1) + Spacer(1) + Status(1) = +4
             int totalLinesToClear = _lastInputLines + 4;
             for (int i = 0; i < totalLinesToClear; i++)
             {
-                Console.Write("\r" + new string(' ', width) + "\n");
+                sb.Append("\r" + new string(' ', width) + "\n");
             }
 
             // Move back up to the fresh start point
-            for (int i = 0; i < totalLinesToClear; i++) Console.Write("\x1b[A");
+            for (int i = 0; i < totalLinesToClear; i++) sb.Append("\x1b[A");
         }
 
-        // 1. Draw Separator (The Fence)
-        Console.Write("\r");
-        Console.ForegroundColor = separatorColor;
-        Console.Write(new string('─', width));
-        Console.ResetColor();
-        Console.Write("\n\r");
+        // 2. Paint Separator (DarkGray ANSI)
+        sb.Append("\r\x1b[90m");
+        sb.Append(new string('─', width));
+        sb.Append("\x1b[0m\n\r");
 
-        // 2. Draw Input Block
-        // NOTE: We scope the background color ONLY to the input area.
-        Console.BackgroundColor = blockBg;
+        // 3. Paint Input Block (White on DarkGray Background)
+        // \x1b[100m = Bright Black (DarkGray) Background
+        // \x1b[97m  = Bright White Foreground
+        sb.Append("\x1b[100m\x1b[97m");
+        sb.Append(prompt);
+        sb.Append(content);
         
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.Write(prompt);
-        
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.Write(content);
-        
-        // --- Full Width Padding ---
+        // Full Width Padding for Background
         int remainingInLine = width - (totalChars % width);
         if (remainingInLine > 0 && remainingInLine < width)
         {
-            Console.Write(new string(' ', remainingInLine));
+            sb.Append(new string(' ', remainingInLine));
         }
 
-        // --- Reset Color & Add Blank Spacer ---
-        Console.ResetColor();
-        Console.Write("\n\r"); 
-
-        // 3. Draw Status Line
-        Console.Write("\n\r");
-        _statusLine.Write(_session, width - 1);
+        // 4. Paint Spacer & Status (Reset Background first)
+        sb.Append("\x1b[0m\n\r"); // Reset background
+        sb.Append(new string(' ', width)); // Blank spacer
+        sb.Append("\n\r");
+        sb.Append(_statusLine.RenderAnsi(_session, width - 1));
         
-        // 4. Restore Cursor Position
-        // --- Floating Anchor Math ---
+        // 5. Restore Cursor Position
         int totalInputLines = totalChars / width;
         int cursorLine = (promptLen + _cursorIndex) / width;
         int cursorCol = (promptLen + _cursorIndex) % width;
 
-        // --- Relative Leapfrog ---
-        // Move up over the Status Line (+1) and the Spacer Line (+1) 
-        // plus any wrapped input lines.
+        // Leapfrog move up
         int linesToMoveUp = (totalInputLines - cursorLine) + 2;
+        for (int i = 0; i < linesToMoveUp; i++) sb.Append("\x1b[A");
         
-        for (int i = 0; i < linesToMoveUp; i++)
-        {
-            Console.Write("\x1b[A"); 
-        }
-        
-        // --- Horizontal Jump ---
-        Console.Write($"\r\x1b[{cursorCol + 1}G"); 
+        // Final Horizontal Positioning & Show Cursor
+        sb.Append($"\r\x1b[{cursorCol + 1}G"); 
+        sb.Append("\x1b[?25h");
+
+        // --- ATOMIC PAINT ---
+        Console.Write(sb.ToString());
 
         // Update state for the next frame
         _lastInputLines = totalInputLines;

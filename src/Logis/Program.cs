@@ -19,6 +19,8 @@ class Program
         // render correctly in all terminal environments.
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
+        PrintLogo();
+
         // Define CLI Options
         var fileOption = new Option<FileInfo?>(name: "--file", aliases: ["-f"]) 
         { 
@@ -274,15 +276,14 @@ class Program
 
         var inputBar = new UI.InputBar(session, statusLine, registry);
 
-        AnsiConsole.MarkupLine("[grey]Interactive mode active. Type /help for commands, Ctrl+C to exit.[/]");
+        AnsiConsole.MarkupLine("[grey]Interactive mode active. Type /help for commands, /exit to exit.[/]");
         AnsiConsole.WriteLine();
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                string? input = await inputBar.ReadLineAsync(ct);
-                if (input == null) break; // Ctrl+C detection via ReadKey loop
+                string input = await inputBar.ReadLineAsync(ct);
 
                 // 1. Slash Command Routing
                 if (registry.TryExecute(input, session)) continue;
@@ -412,5 +413,23 @@ class Program
         }
 
         return 0;
+    }
+
+    private static void PrintLogo()
+    {
+        AnsiConsole.MarkupLine("""
+
+            [blueviolet]█████████████████████████████████████████[/]
+            [blueviolet]█▌                                     ▐█[/]
+            [blueviolet]█▌██╗      ██████╗  ██████╗ ██╗███████╗▐█[/]
+            [blueviolet]█▌██║     ██╔═══██╗██╔════╝ ██║██╔════╝▐█[/]
+            [blueviolet]█▌██║     ██║   ██║██║  ███╗██║███████╗▐█[/]
+            [blueviolet]█▌██║     ██║   ██║██║   ██║██║╚════██║▐█[/]
+            [blueviolet]█▌███████╗╚██████╔╝╚██████╔╝██║███████║▐█[/]
+            [blueviolet]█▌╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚══════╝▐█[/]
+            [blueviolet]█▌                                     ▐█[/]
+            [blueviolet]█████████████████████████████████████████[/]
+
+            """);
     }
 }

@@ -37,7 +37,7 @@ public class InputBar
     /// Reads a line of input from the user, handling all navigation and history shortcuts.
     /// Redraws the input bar and status line on every keystroke.
     /// </summary>
-    public async Task<string?> ReadLineAsync(CancellationToken ct)
+    public async Task<string> ReadLineAsync(CancellationToken ct)
     {
         // Reset state for new input
         _input.Clear();
@@ -80,9 +80,9 @@ public class InputBar
             
             if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C)
             {
-                // Clean exit is handled by the CancellationTokenSource in Program.cs,
-                // but we return null here to signal the loop to terminate.
-                return null;
+                // Clean exit is handled by throwing an exception, which aligns with 
+                // the /exit command and triggers the graceful shutdown in Program.cs.
+                throw new OperationCanceledException("User requested exit.");
             }
 
             // 2. Handle Navigation
@@ -123,7 +123,7 @@ public class InputBar
             }
         }
 
-        return null;
+        throw new OperationCanceledException();
     }
 
     private bool HandleNavigation(ConsoleKeyInfo key)

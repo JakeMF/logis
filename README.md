@@ -1,8 +1,21 @@
+```text
+█████████████████████████████████████████
+█▌                                     ▐█
+█▌██╗      ██████╗  ██████╗ ██╗███████╗▐█
+█▌██║     ██╔═══██╗██╔════╝ ██║██╔════╝▐█
+█▌██║     ██║   ██║██║  ███╗██║███████╗▐█
+█▌██║     ██║   ██║██║   ██║██║╚════██║▐█
+█▌███████╗╚██████╔╝╚██████╔╝██║███████║▐█
+█▌╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚══════╝▐█
+█▌                                     ▐█
+█████████████████████████████████████████
+```
+
 # Logis
 
 A high-performance AI coding agent harness written in C# and engineered for **Native AOT** compilation.
 
-> **Current Status:** **v0.7.0 (Stateful Interactive Agent)**
+> **Current Status:** **v0.8.0 (Interactive Input Bar & Enhanced UI)**
 > Logis has transitioned into a persistent resident process that maintains conversation memory and enforces professional engineering workflows through a state-aware orchestration engine.
 
 ---
@@ -10,6 +23,9 @@ A high-performance AI coding agent harness written in C# and engineered for **Na
 ## Core Features
 
 * **Persistent Sessions:** Conversation history and researched context persist across turns. Resume any previous work using the unique session ID.
+* **Modern Input Bar:** A high-performance terminal input handler with cursor navigation (Ctrl+Left/Right), history (Up/Down), and word-based editing (Ctrl+Backspace/W).
+* **Enhanced UI:** Visually rich startup sequence with a horizontal gradient logo and a rounded panel enclosure.
+* **Graceful Termination:** Consistent exit behavior via `/exit` or `Ctrl+C` with automatic terminal restoration.
 * **State Machine Orchestration:** Enforces a rigorous `Research -> Edit -> Review` workflow. The agent must successfully gather file context via tools before it is authorized to propose code changes.
 * **Autonomous Tool Use:** The model dynamically lists directories and reads files to understand your codebase's architecture and dependencies.
 * **Surgical Diff Engine:** Propose changes using precise Search/Replace blocks (Diff Mode) or full-file replacements (Whole Mode) with integrated visual verification.

@@ -298,6 +298,25 @@ public class InputBar
     }
 
     /// <summary>
+    /// Restores the terminal to a clean state by showing the cursor, 
+    /// resetting colors, and moving past the UI block.
+    /// </summary>
+    public void Cleanup()
+    {
+        // 1. Show Cursor
+        Console.Write("\x1b[?25h");
+
+        // 2. Reset Colors
+        Console.ResetColor();
+
+        // 3. Move down past the entire UI block to prevent the shell prompt 
+        // from overwriting our last status line or vice versa.
+        int linesDown = (_lastInputLines - _lastCursorLine) + 3;
+        for (int i = 0; i < linesDown; i++) Console.Write("\n");
+        Console.Write("\r");
+    }
+
+    /// <summary>
     /// Performs a full redraw of the input bar and status line.
     /// Anchors the UI at the bottom of the current terminal view.
     /// </summary>

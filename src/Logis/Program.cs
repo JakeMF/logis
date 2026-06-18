@@ -251,6 +251,7 @@ class Program
         // --- Phase 3: UI Integration ---
         var registry = new CommandRegistry();
         registry.Register(new UI.Commands.HelpCommand(registry));
+        registry.Register(new UI.Commands.ExitCommand());
 
         var statusLine = new StatusLine();
         statusLine.AddSegment(new StatusSegment("cwd", s => {
@@ -276,115 +277,138 @@ class Program
         AnsiConsole.MarkupLine("[grey]Interactive mode active. Type /help for commands, Ctrl+C to exit.[/]");
         AnsiConsole.WriteLine();
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            string? input = await inputBar.ReadLineAsync(ct);
-            if (input == null) break; // Ctrl+C or cancellation
-
-            // 1. Slash Command Routing
-            if (registry.TryExecute(input, session)) continue;
-
-            // 2. Intent detection: gates the model's capability scope for the upcoming turn.
-            stateService.Transition(session, input, msg => 
+            while (!ct.IsCancellationRequested)
             {
-                if (options.Debug) AnsiConsole.MarkupLine($"[grey]DEBUG: {Markup.Escape(msg)}[/]");
-            });
+                string? input = await inputBar.ReadLineAsync(ct);
+                if (input == null) break; // Ctrl+C detection via ReadKey loop
 
-            // 3. Persist User Turn (Sync both memory and JSONL)
-            var userMessage = new ChatMessage(ChatRole.User, input);
-            var userTurn = new SessionTurn(
-                Id: Guid.NewGuid().ToString("N"),
-                SessionId: session.Id,
-                Role: "user",
-                Content: input,
-                ToolName: null,
-                ToolCallId: null,
-                StateAtTurn: session.State.ToString(),
-                FinishReason: null,
-                TokenCount: null,
-                Iteration: null,
-                IsPinned: false,
-                IsSummary: false,
-                ToolResultPath: null,
-                WorkspaceRoot: session.Context.WorkspaceRoot,
-                Timestamp: DateTime.UtcNow
-            );
+                // 1. Slash Command Routing
+                if (registry.TryExecute(input, session)) continue;
 
-            session.History.Add(userMessage);
-            sessionService.AppendTurn(session, userTurn);
-            
-            if (options.Debug)
-            {
-                AnsiConsole.MarkupLine($"[grey]DEBUG: State transitioned to {session.State}[/]");
-            }
-
-            // 4. Perform Completion
-            CompletionResult result = await AnsiConsole.Status()
-                .Spinner(Spinner.Known.Dots)
-                .SpinnerStyle(new Style(Color.BlueViolet))
-                .StartAsync("Thinking...", async ctx =>
+                // 2. Intent detection: gates the model's capability scope for the upcoming turn.
+                stateService.Transition(session, input, msg => 
                 {
-                    return await completionService.CompleteAsync(session, sessionService, contextService, config, options, skillService, ctx, ct);
+                    if (options.Debug) AnsiConsole.MarkupLine($"[grey]DEBUG: {Markup.Escape(msg)}[/]");
                 });
 
-            // 5. Output Response & Apply Edits
-            bool handledAsEdit = false;
-            if (session.State == SessionState.Edit)
-            {
-                var diffService = new DiffService();
-                foreach (var relativePath in session.Context.FocusedFiles)
+                // 3. Persist User Turn (Sync both memory and JSONL)
+                var userMessage = new ChatMessage(ChatRole.User, input);
+                var userTurn = new SessionTurn(
+                    Id: Guid.NewGuid().ToString("N"),
+                    SessionId: session.Id,
+                    Role: "user",
+                    Content: input,
+                    ToolName: null,
+                    ToolCallId: null,
+                    StateAtTurn: session.State.ToString(),
+                    FinishReason: null,
+                    TokenCount: null,
+                    Iteration: null,
+                    IsPinned: false,
+                    IsSummary: false,
+                    ToolResultPath: null,
+                    WorkspaceRoot: session.Context.WorkspaceRoot,
+                    Timestamp: DateTime.UtcNow
+                );
+
+                session.History.Add(userMessage);
+                sessionService.AppendTurn(session, userTurn);
+                
+                if (options.Debug)
                 {
-                    string fullPath = Path.Combine(session.Context.WorkspaceRoot, relativePath);
-                    if (!File.Exists(fullPath)) continue;
+                    AnsiConsole.MarkupLine($"[grey]DEBUG: State transitioned to {session.State}[/]");
+                }
 
-                    try 
+                // 4. Perform Completion
+                CompletionResult result = await AnsiConsole.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .SpinnerStyle(new Style(Color.BlueViolet))
+                    .StartAsync("Thinking...", async ctx =>
                     {
-                        string original = await File.ReadAllTextAsync(fullPath, ct);
-                        string updated;
+                        return await completionService.CompleteAsync(session, sessionService, contextService, config, options, skillService, ctx, ct);
+                    });
 
-                        if (options.EditFormat == EditFormat.Whole)
-                        {
-                            updated = result.Content.Trim();
-                            diffService.RenderDiff(original, updated, relativePath);
-                        }
-                        else
-                        {
-                            updated = diffService.ApplyEdit(original, result.Content, relativePath);
-                        }
+                // 5. Output Response & Apply Edits
+                bool handledAsEdit = false;
+                if (session.State == SessionState.Edit)
+                {
+                    var diffService = new DiffService();
+                    foreach (var relativePath in session.Context.FocusedFiles)
+                    {
+                        string fullPath = Path.Combine(session.Context.WorkspaceRoot, relativePath);
+                        if (!File.Exists(fullPath)) continue;
 
-                        if (updated != original)
+                        try 
                         {
-                            handledAsEdit = true;
-                            var choice = AnsiConsole.Prompt(
-                                new SelectionPrompt<string>()
-                                    .Title($"[bold yellow]Apply changes to {relativePath}?[/]")
-                                    .AddChoices(new[] { "1: Yes", "2: No" }));
+                            string original = await File.ReadAllTextAsync(fullPath, ct);
+                            string updated;
 
-                            if (choice.StartsWith("1"))
+                            if (options.EditFormat == EditFormat.Whole)
                             {
-                                await File.WriteAllTextAsync(fullPath, updated, ct);
-                                AnsiConsole.MarkupLine($"[green]✔ Applied to {relativePath}[/]");
-                                session.State = SessionState.Review;
-                                sessionService.UpdateSessionMetadata(session);
+                                updated = result.Content.Trim();
+                                diffService.RenderDiff(original, updated, relativePath);
                             }
                             else
                             {
-                                AnsiConsole.MarkupLine("[grey]Changes discarded. You can provide feedback to adjust the proposal.[/]");
+                                updated = diffService.ApplyEdit(original, result.Content, relativePath);
+                            }
+
+                            if (updated != original)
+                            {
+                                handledAsEdit = true;
+                                var choice = AnsiConsole.Prompt(
+                                    new SelectionPrompt<string>()
+                                        .Title($"[bold yellow]Apply changes to {relativePath}?[/]")
+                                        .AddChoices(new[] { "1: Yes", "2: No" }));
+
+                                if (choice.StartsWith("1"))
+                                {
+                                    await File.WriteAllTextAsync(fullPath, updated, ct);
+                                    AnsiConsole.MarkupLine($"[green]✔ Applied to {relativePath}[/]");
+                                    session.State = SessionState.Review;
+                                    sessionService.UpdateSessionMetadata(session);
+                                }
+                                else
+                                {
+                                    AnsiConsole.MarkupLine("[grey]Changes discarded. You can provide feedback to adjust the proposal.[/]");
+                                }
                             }
                         }
-                    }
-                    catch 
-                    { 
-                        // No blocks for this specific file or match failed, continue to next or fallback to print
+                        catch 
+                        { 
+                            // No blocks for this specific file or match failed, continue to next or fallback to print
+                        }
                     }
                 }
-            }
 
-            if (!handledAsEdit)
-            {
-                AnsiConsole.Write(new Text(result.Content, new Style(Color.Grey84)));
-                AnsiConsole.WriteLine();
+                if (!handledAsEdit)
+                {
+                    AnsiConsole.Write(new Text(result.Content, new Style(Color.Grey84)));
+                    AnsiConsole.WriteLine();
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Graceful exit requested by user
+        }
+        finally
+        {
+            // 1. Restore terminal attributes first
+            inputBar.Cleanup();
+
+            // 2. Draw a final separator and termination message
+            int width = Console.WindowWidth;
+            if (width <= 0) width = 80;
+            
+            Console.Write("\x1b[90m"); // DarkGray ANSI
+            Console.WriteLine(new string('─', width));
+            Console.Write("\x1b[0m"); // Reset
+            
+            AnsiConsole.MarkupLine("[yellow]Session terminated.[/]");
+            Console.WriteLine();
         }
 
         return 0;

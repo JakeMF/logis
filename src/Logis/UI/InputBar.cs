@@ -22,6 +22,10 @@ public class InputBar
     private int _historyIndex = -1;
     private string _savedPartial = string.Empty;
 
+    // UI State
+    private int _lastInputLines = -1;
+    private int _lastCursorLine = 0;
+
     public InputBar(Session session, StatusLine statusLine, CommandRegistry registry)
     {
         _session = session;
@@ -40,6 +44,8 @@ public class InputBar
         _cursorIndex = 0;
         _historyIndex = -1;
         _savedPartial = string.Empty;
+        _lastInputLines = -1;
+        _lastCursorLine = 0;
 
         Redraw();
 
@@ -297,35 +303,91 @@ public class InputBar
     /// </summary>
     private void Redraw()
     {
-        // Redraw uses relative moves (\r and \n) instead of absolute coordinates.
-        // This ensures the input bar "floats" correctly at the bottom of the terminal 
-        // even if new LLM output pushes the view up.
+        int width = Console.WindowWidth;
+        if (width <= 0) width = 80;
 
-        int maxWidth = Console.WindowWidth;
-        int originalTop = Console.CursorTop;
+        string prompt = "> ";
+        int promptLen = prompt.Length;
+        string content = _input.ToString();
+        int totalChars = promptLen + content.Length;
 
-        // 1. Draw Input Line
-        Console.Write("\r"); // Move to start of line
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("> ");
-        Console.ResetColor();
-        
-        Console.Write(_input.ToString());
-        
-        // Clear trailing characters from previous longer inputs
-        int currentLineLen = 2 + _input.Length;
-        if (currentLineLen < maxWidth)
+        // --- Step 4.2: Visual Block Configuration ---
+        ConsoleColor blockBg = ConsoleColor.DarkGray;
+        ConsoleColor separatorColor = ConsoleColor.DarkGray;
+
+        // 0. Reset & Wipe (The "Canvas Prep")
+        // If we have a previous frame, we move to its top and CLEAR the entire height.
+        // This prevents "ghost" lines when the input wraps/unwraps or is deleted.
+        if (_lastInputLines >= 0)
         {
-            Console.Write(new string(' ', maxWidth - currentLineLen));
+            // Move back to the separator line
+            for (int i = 0; i < _lastCursorLine + 1; i++) Console.Write("\x1b[A");
+            
+            // Wipe the entire vertical span of the previous UI block
+            // Height = Separator(1) + Input(_lastInputLines+1) + Spacer(1) + Status(1) = +4
+            int totalLinesToClear = _lastInputLines + 4;
+            for (int i = 0; i < totalLinesToClear; i++)
+            {
+                Console.Write("\r" + new string(' ', width) + "\n");
+            }
+
+            // Move back up to the fresh start point
+            for (int i = 0; i < totalLinesToClear; i++) Console.Write("\x1b[A");
         }
 
-        // 2. Draw Status Line (always one line below input)
-        // Ensure we don't trigger a scroll-up by writing to the very last char of the window
+        // 1. Draw Separator (The Fence)
+        Console.Write("\r");
+        Console.ForegroundColor = separatorColor;
+        Console.Write(new string('─', width));
+        Console.ResetColor();
         Console.Write("\n\r");
-        _statusLine.Write(_session, maxWidth - 1);
 
-        // 3. Restore Cursor Position
-        // Move back up to the input line
-        Console.SetCursorPosition(2 + _cursorIndex, originalTop);
+        // 2. Draw Input Block
+        // NOTE: We scope the background color ONLY to the input area.
+        Console.BackgroundColor = blockBg;
+        
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.Write(prompt);
+        
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.Write(content);
+        
+        // --- Full Width Padding ---
+        int remainingInLine = width - (totalChars % width);
+        if (remainingInLine > 0 && remainingInLine < width)
+        {
+            Console.Write(new string(' ', remainingInLine));
+        }
+
+        // --- Reset Color & Add Blank Spacer ---
+        Console.ResetColor();
+        Console.Write("\n\r"); 
+
+        // 3. Draw Status Line
+        Console.Write("\n\r");
+        _statusLine.Write(_session, width - 1);
+        
+        // 4. Restore Cursor Position
+        // --- Floating Anchor Math ---
+        int totalInputLines = totalChars / width;
+        int cursorLine = (promptLen + _cursorIndex) / width;
+        int cursorCol = (promptLen + _cursorIndex) % width;
+
+        // --- Relative Leapfrog ---
+        // Move up over the Status Line (+1) and the Spacer Line (+1) 
+        // plus any wrapped input lines.
+        int linesToMoveUp = (totalInputLines - cursorLine) + 2;
+        
+        for (int i = 0; i < linesToMoveUp; i++)
+        {
+            Console.Write("\x1b[A"); 
+        }
+        
+        // --- Horizontal Jump ---
+        Console.Write($"\r\x1b[{cursorCol + 1}G"); 
+
+        // Update state for the next frame
+        _lastInputLines = totalInputLines;
+        _lastCursorLine = cursorLine;
     }
 }

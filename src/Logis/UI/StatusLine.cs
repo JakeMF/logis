@@ -111,7 +111,5 @@ public class StatusLine
         {
             Console.Write(new string(' ', maxWidth - currentWidth));
         }
-        
-        Console.ResetColor();
     }
 }

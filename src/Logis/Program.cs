@@ -2,6 +2,9 @@ using System.CommandLine;
 using Spectre.Console;
 using Logis.Models;
 using Logis.Services;
+using Logis.UI;
+using Logis.UI.Commands;
+using System.Text;
 
 namespace Logis;
 
@@ -245,63 +248,49 @@ class Program
         // Load durable history into memory once at session start
         await sessionService.LoadHistoryAsync(session, ct);
 
-        // We use AnsiConsole for UI and metadata. Standard Console.Out is reserved 
-        // for final data output to ensure Logis remains pipe-friendly.
-        AnsiConsole.MarkupLine("[grey]Type your instructions below. Press Enter to send, Ctrl+C to exit.[/]");
+        // --- Phase 3: UI Integration ---
+        var registry = new CommandRegistry();
+        registry.Register(new UI.Commands.HelpCommand(registry));
+
+        var statusLine = new StatusLine();
+        statusLine.AddSegment(new StatusSegment("cwd", s => {
+            string cwd = Directory.GetCurrentDirectory();
+            return cwd.Length > 30 ? "..." + cwd[^27..] : cwd;
+        }, s => ConsoleColor.Yellow, 1));
+        statusLine.AddSegment(new StatusSegment("model", s => {
+            var provider = s.Provider ?? config.DefaultProvider;
+            var model = s.Model ?? (config.Providers.TryGetValue(provider, out var p) ? p.Model : "unknown");
+            return $"{provider}:{model}";
+        }, s => ConsoleColor.Cyan, 2));
+        statusLine.AddSegment(new StatusSegment("state", s => s.State.ToString(), s => s.State switch {
+            SessionState.Research => ConsoleColor.Yellow,
+            SessionState.Edit => ConsoleColor.Blue,
+            SessionState.Review => ConsoleColor.Cyan,
+            SessionState.Error => ConsoleColor.Red,
+            _ => ConsoleColor.Gray
+        }, 3));
+        statusLine.AddSegment(new StatusSegment("session", s => s.Id[..8], s => ConsoleColor.DarkGray, 4));
+
+        var inputBar = new UI.InputBar(session, statusLine, registry);
+
+        AnsiConsole.MarkupLine("[grey]Interactive mode active. Type /help for commands, Ctrl+C to exit.[/]");
         AnsiConsole.WriteLine();
 
         while (!ct.IsCancellationRequested)
         {
-            string? input = null;
-            
-            // We use a manual ReadKey loop inside AnsiConsole.Live to achieve 0ms input latency.
-            // This bypasses the standard line buffer, allowing for a "native" terminal feel 
-            // where the UI can potentially react to keystrokes in real-time.
-            await AnsiConsole.Live(new Text("> ")).StartAsync(async ctx => 
-            {
-                var userInput = new StringBuilder();
-                while (input == null)
-                {
-                    if (ct.IsCancellationRequested) break;
+            string? input = await inputBar.ReadLineAsync(ct);
+            if (input == null) break; // Ctrl+C or cancellation
 
-                    if (!Console.KeyAvailable)
-                    {
-                        // High-frequency polling for maximum responsiveness
-                        await Task.Delay(20, ct);
-                        continue;
-                    }
+            // 1. Slash Command Routing
+            if (registry.TryExecute(input, session)) continue;
 
-                    var key = Console.ReadKey(intercept: true);
-                    if (key.Key == ConsoleKey.Enter)
-                    {
-                        input = userInput.ToString();
-                        Console.WriteLine();
-                        break;
-                    }
-                    else if (key.Key == ConsoleKey.Backspace && userInput.Length > 0)
-                    {
-                        userInput.Remove(userInput.Length - 1, 1);
-                        Console.Write("\b \b");
-                    }
-                    else if (!char.IsControl(key.KeyChar))
-                    {
-                        userInput.Append(key.KeyChar);
-                        Console.Write(key.KeyChar);
-                    }
-                    
-                    ctx.UpdateTarget(new Text("> " + userInput.ToString()));
-                }
-            });
-
-            if (string.IsNullOrWhiteSpace(input)) continue;
-
-            // 1. Intent detection: gates the model's capability scope for the upcoming turn.
+            // 2. Intent detection: gates the model's capability scope for the upcoming turn.
             stateService.Transition(session, input, msg => 
             {
                 if (options.Debug) AnsiConsole.MarkupLine($"[grey]DEBUG: {Markup.Escape(msg)}[/]");
             });
 
-            // 2. Persist User Turn (Sync both memory and JSONL)
+            // 3. Persist User Turn (Sync both memory and JSONL)
             var userMessage = new ChatMessage(ChatRole.User, input);
             var userTurn = new SessionTurn(
                 Id: Guid.NewGuid().ToString("N"),

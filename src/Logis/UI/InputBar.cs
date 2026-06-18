@@ -171,6 +171,13 @@ public class InputBar
             return true;
         }
 
+        // Ctrl+W: Delete Word Left (Standard shell shortcut)
+        if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.W)
+        {
+            DeleteWordLeft();
+            return true;
+        }
+
         switch (key.Key)
         {
             case ConsoleKey.Backspace:

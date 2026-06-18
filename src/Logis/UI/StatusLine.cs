@@ -8,12 +8,12 @@ namespace Logis.UI;
 /// </summary>
 /// <param name="Label">The display label for the segment.</param>
 /// <param name="ValueResolver">A function that resolves the live value from the session.</param>
-/// <param name="Color">The console color for the segment value.</param>
+/// <param name="ColorResolver">A function that resolves the color for the segment based on the session.</param>
 /// <param name="Priority">Rendering priority (lower = higher priority, dropped last).</param>
 public record StatusSegment(
     string Label,
     Func<Session, string> ValueResolver,
-    ConsoleColor Color = ConsoleColor.Gray,
+    Func<Session, ConsoleColor> ColorResolver,
     int Priority = 0
 );
 
@@ -90,6 +90,7 @@ public class StatusLine
         foreach (var segment in resolved)
         {
             string value = segment.ValueResolver(session);
+            ConsoleColor color = segment.ColorResolver(session);
             string labelPart = $" {(first ? "" : "| ")}{segment.Label}: ";
             string valuePart = $"{value} ";
 
@@ -98,7 +99,7 @@ public class StatusLine
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.Write(labelPart);
             
-            Console.ForegroundColor = segment.Color;
+            Console.ForegroundColor = color;
             Console.Write(valuePart);
 
             currentWidth += labelPart.Length + valuePart.Length;

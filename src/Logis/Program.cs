@@ -256,7 +256,7 @@ class Program
         registry.Register(new UI.Commands.ExitCommand());
 
         var statusLine = new StatusLine();
-        statusLine.AddSegment(new StatusSegment("cwd", s => {
+        statusLine.AddSegment(new StatusSegment("directory", s => {
             string cwd = Directory.GetCurrentDirectory();
             return cwd.Length > 30 ? "..." + cwd[^27..] : cwd;
         }, s => ConsoleColor.Yellow, 1));
@@ -417,19 +417,45 @@ class Program
 
     private static void PrintLogo()
     {
-        AnsiConsole.MarkupLine("""
+        var logoLines = new[]
+        {
+            " ██╗      ██████╗  ██████╗ ██╗███████╗",
+            " ██║     ██╔═══██╗██╔════╝ ██║██╔════╝",
+            " ██║     ██║   ██║██║  ███╗██║███████╗",
+            " ██║     ██║   ██║██║   ██║██║╚════██║",
+            " ███████╗╚██████╔╝╚██████╔╝██║███████║",
+            " ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚══════╝"
+        };
 
-            [blueviolet]█████████████████████████████████████████[/]
-            [blueviolet]█▌                                     ▐█[/]
-            [blueviolet]█▌██╗      ██████╗  ██████╗ ██╗███████╗▐█[/]
-            [blueviolet]█▌██║     ██╔═══██╗██╔════╝ ██║██╔════╝▐█[/]
-            [blueviolet]█▌██║     ██║   ██║██║  ███╗██║███████╗▐█[/]
-            [blueviolet]█▌██║     ██║   ██║██║   ██║██║╚════██║▐█[/]
-            [blueviolet]█▌███████╗╚██████╔╝╚██████╔╝██║███████║▐█[/]
-            [blueviolet]█▌╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚══════╝▐█[/]
-            [blueviolet]█▌                                     ▐█[/]
-            [blueviolet]█████████████████████████████████████████[/]
+        var startColor = Color.BlueViolet;
+        var endColor = Color.Cyan;
 
-            """);
+        var rows = new List<Markup>();
+        int maxLength = logoLines.Max(l => l.Length);
+
+        foreach (var line in logoLines)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < line.Length; i++)
+            {
+                float t = maxLength > 1 ? (float)i / (maxLength - 1) : 0;
+
+                byte r = (byte)(startColor.R + (endColor.R - startColor.R) * t);
+                byte g = (byte)(startColor.G + (endColor.G - startColor.G) * t);
+                byte b = (byte)(startColor.B + (endColor.B - startColor.B) * t);
+
+                var color = new Color(r, g, b);
+                sb.Append($"[{color.ToMarkup()}]{Markup.Escape(line[i].ToString())}[/]");
+            }
+            rows.Add(new Markup(sb.ToString()));
+        }
+
+        var panel = new Panel(new Rows(rows))
+            .Border(BoxBorder.Rounded)
+            .BorderColor(startColor)
+            .Padding(1, 0, 1, 0);
+
+        AnsiConsole.Write(panel);
+        AnsiConsole.WriteLine();
     }
 }

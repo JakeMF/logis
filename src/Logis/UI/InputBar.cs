@@ -22,6 +22,11 @@ public class InputBar
     private int _historyIndex = -1;
     private string _savedPartial = string.Empty;
 
+    // Autocomplete State
+    private int _menuSelectionIndex = -1;
+    private string _savedQuery = string.Empty;
+    private int _lastMenuHeight = 0;
+
     // UI State
     private int _lastInputLines = -1;
     private int _lastCursorLine = 0;
@@ -44,6 +49,9 @@ public class InputBar
         _cursorIndex = 0;
         _historyIndex = -1;
         _savedPartial = string.Empty;
+        _menuSelectionIndex = -1;
+        _savedQuery = string.Empty;
+        _lastMenuHeight = 0;
         _lastInputLines = -1;
         _lastCursorLine = 0;
 
@@ -62,6 +70,20 @@ public class InputBar
             // 1. Handle Submission & Exit
             if (key.Key == ConsoleKey.Enter)
             {
+                if (_menuSelectionIndex != -1)
+                {
+                    var matches = GetActiveMatches();
+                    if (_menuSelectionIndex >= 0 && _menuSelectionIndex < matches.Count)
+                    {
+                        _input.Clear();
+                        _input.Append($"/{matches[_menuSelectionIndex].Name}");
+                        _cursorIndex = _input.Length;
+                    }
+                }
+
+                CommitAutocompleteSelection();
+                Redraw(); // Wipe the menu from the screen before submitting
+
                 string result = _input.ToString();
                 if (string.IsNullOrWhiteSpace(result)) continue;
 
@@ -83,6 +105,41 @@ public class InputBar
                 // Clean exit is handled by throwing an exception, which aligns with 
                 // the /exit command and triggers the graceful shutdown in Program.cs.
                 throw new OperationCanceledException("User requested exit.");
+            }
+
+            // 1.5. Handle Command Autocomplete Menu Navigation
+            if (IsCommandAutocompleteActive())
+            {
+                var matches = GetActiveMatches();
+                if (matches.Count > 0 && (key.Key == ConsoleKey.Tab || key.Key == ConsoleKey.UpArrow || key.Key == ConsoleKey.DownArrow))
+                {
+                    if (_menuSelectionIndex == -1)
+                    {
+                        _savedQuery = _input.ToString();
+                    }
+
+                    bool goBackward = key.Key == ConsoleKey.UpArrow || 
+                                     (key.Key == ConsoleKey.Tab && key.Modifiers.HasFlag(ConsoleModifiers.Shift));
+
+                    if (goBackward)
+                    {
+                        _menuSelectionIndex--;
+                        if (_menuSelectionIndex < -1) _menuSelectionIndex = matches.Count - 1;
+                    }
+                    else
+                    {
+                        _menuSelectionIndex++;
+                        if (_menuSelectionIndex >= matches.Count) _menuSelectionIndex = -1;
+                    }
+
+                    // Update input bar text inline
+                    _input.Clear();
+                    _input.Append(_menuSelectionIndex == -1 ? _savedQuery : $"/{matches[_menuSelectionIndex].Name}");
+                    _cursorIndex = _input.Length;
+
+                    Redraw();
+                    continue;
+                }
             }
 
             // 2. Handle Navigation
@@ -117,6 +174,8 @@ public class InputBar
                     _savedPartial = string.Empty;
                 }
 
+                CommitAutocompleteSelection();
+
                 _input.Insert(_cursorIndex, key.KeyChar);
                 _cursorIndex++;
                 Redraw();
@@ -128,6 +187,12 @@ public class InputBar
 
     private bool HandleNavigation(ConsoleKeyInfo key)
     {
+        if (key.Key == ConsoleKey.LeftArrow || key.Key == ConsoleKey.RightArrow || 
+            key.Key == ConsoleKey.Home || key.Key == ConsoleKey.End)
+        {
+            CommitAutocompleteSelection();
+        }
+
         switch (key.Key)
         {
             case ConsoleKey.LeftArrow:
@@ -162,6 +227,7 @@ public class InputBar
         // Ctrl+U: Clear Line
         if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.U)
         {
+            CommitAutocompleteSelection();
             _input.Clear();
             _cursorIndex = 0;
             return true;
@@ -170,6 +236,7 @@ public class InputBar
         // Ctrl+K: Delete to End
         if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.K)
         {
+            CommitAutocompleteSelection();
             if (_cursorIndex < _input.Length)
             {
                 _input.Remove(_cursorIndex, _input.Length - _cursorIndex);
@@ -180,6 +247,7 @@ public class InputBar
         // Ctrl+W: Delete Word Left (Standard shell shortcut)
         if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.W)
         {
+            CommitAutocompleteSelection();
             DeleteWordLeft();
             return true;
         }
@@ -187,6 +255,7 @@ public class InputBar
         switch (key.Key)
         {
             case ConsoleKey.Backspace:
+                CommitAutocompleteSelection();
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
                 {
                     DeleteWordLeft();
@@ -199,6 +268,7 @@ public class InputBar
                 return true;
 
             case ConsoleKey.Delete:
+                CommitAutocompleteSelection();
                 if (_cursorIndex < _input.Length)
                 {
                     _input.Remove(_cursorIndex, 1);
@@ -212,6 +282,11 @@ public class InputBar
 
     private bool HandleHistory(ConsoleKeyInfo key)
     {
+        if (key.Key == ConsoleKey.UpArrow || key.Key == ConsoleKey.DownArrow)
+        {
+            CommitAutocompleteSelection();
+        }
+
         if (key.Key == ConsoleKey.UpArrow)
         {
             if (_historyIndex == -1)
@@ -311,7 +386,7 @@ public class InputBar
 
         // 3. Move down past the entire UI block to prevent the shell prompt 
         // from overwriting our last status line or vice versa.
-        int linesDown = (_lastInputLines - _lastCursorLine) + 3;
+        int linesDown = (_lastInputLines - _lastCursorLine) + 3 + _lastMenuHeight;
         for (int i = 0; i < linesDown; i++) Console.Write("\n");
         Console.Write("\r");
     }
@@ -342,10 +417,11 @@ public class InputBar
         if (_lastInputLines >= 0)
         {
             // Move back to the separator line from current typing position
-            for (int i = 0; i < _lastCursorLine + 1; i++) sb.Append("\x1b[A");
+            int linesToClearMoveUp = _lastCursorLine + 1;
+            for (int i = 0; i < linesToClearMoveUp; i++) sb.Append("\x1b[A");
             
-            // Wipe the entire vertical span of the previous UI block
-            int totalLinesToClear = _lastInputLines + 4;
+            // Wipe the entire vertical span of the previous UI block (including menu)
+            int totalLinesToClear = _lastMenuHeight + _lastInputLines + 4;
             for (int i = 0; i < totalLinesToClear; i++)
             {
                 sb.Append("\r" + new string(' ', width) + "\n");
@@ -361,8 +437,6 @@ public class InputBar
         sb.Append("\x1b[0m\n\r");
 
         // 3. Paint Input Block (White on DarkGray Background)
-        // \x1b[100m = Bright Black (DarkGray) Background
-        // \x1b[97m  = Bright White Foreground
         sb.Append("\x1b[100m\x1b[97m");
         sb.Append(prompt);
         sb.Append(content);
@@ -373,9 +447,102 @@ public class InputBar
         {
             sb.Append(new string(' ', remainingInLine));
         }
+        sb.Append("\x1b[0m\n\r"); // Reset background and go to next line
 
-        // 4. Paint Spacer & Status (Reset Background first)
-        sb.Append("\x1b[0m\n\r"); // Reset background
+        // 3.5. Paint Autocomplete Menu (if active)
+        var matches = GetActiveMatches();
+        int menuHeight = 0;
+
+        if (matches.Count > 0)
+        {
+            int maxVisible = 5;
+            int visibleCount = Math.Min(matches.Count, maxVisible);
+            
+            int startIndex = 0;
+            if (matches.Count > maxVisible)
+            {
+                if (_menuSelectionIndex == -1)
+                {
+                    startIndex = 0;
+                }
+                else
+                {
+                    startIndex = Math.Clamp(_menuSelectionIndex - (maxVisible / 2), 0, matches.Count - maxVisible);
+                }
+            }
+
+            int itemsAbove = startIndex;
+            int itemsBelow = matches.Count - (startIndex + visibleCount);
+
+            // Render Header
+            if (itemsAbove > 0)
+            {
+                sb.Append($"\r\x1b[90m  Suggestions (▲ {itemsAbove} more):\x1b[0m\n\r");
+            }
+            else
+            {
+                sb.Append("\r\x1b[90m  Suggestions:\x1b[0m\n\r");
+            }
+            menuHeight++;
+
+            // Render Match Lines
+            for (int i = 0; i < visibleCount; i++)
+            {
+                int matchIndex = startIndex + i;
+                var match = matches[matchIndex];
+                bool isSelected = (matchIndex == _menuSelectionIndex);
+
+                if (isSelected)
+                {
+                    sb.Append("\r\x1b[93m  → "); // Yellow Arrow
+                    sb.Append($"/{match.Name}");
+                    sb.Append("\x1b[0m\x1b[90m - "); // DarkGray separator
+                    
+                    string desc = match.Description;
+                    int prefixLen = 6 + match.Name.Length;
+                    int descLimit = width - prefixLen - 4;
+                    if (descLimit > 0 && desc.Length > descLimit)
+                    {
+                        desc = desc[..descLimit] + "...";
+                    }
+                    sb.Append(desc);
+                    sb.Append("\x1b[0m\n\r");
+                }
+                else
+                {
+                    sb.Append("\r\x1b[90m    \x1b[32m"); // Indent & Green name
+                    sb.Append($"/{match.Name}");
+                    sb.Append("\x1b[0m\x1b[90m - ");
+                    
+                    string desc = match.Description;
+                    int prefixLen = 6 + match.Name.Length;
+                    int descLimit = width - prefixLen - 4;
+                    if (descLimit > 0 && desc.Length > descLimit)
+                    {
+                        desc = desc[..descLimit] + "...";
+                    }
+                    sb.Append(desc);
+                    sb.Append("\x1b[0m\n\r");
+                }
+                menuHeight++;
+            }
+
+            // Render Footer
+            if (matches.Count > maxVisible)
+            {
+                if (itemsBelow > 0)
+                {
+                    sb.Append($"\r\x1b[90m  (▼ {itemsBelow} more... type to filter)\x1b[0m\n\r");
+                }
+                else
+                {
+                    sb.Append("\r\x1b[90m  (type to filter)\x1b[0m\n\r");
+                }
+                menuHeight++;
+            }
+        }
+
+        // 4. Paint Spacer & Status
         sb.Append(new string(' ', width)); // Blank spacer
         sb.Append("\n\r");
         sb.Append(_statusLine.RenderAnsi(_session, width - 1));
@@ -386,7 +553,7 @@ public class InputBar
         int cursorCol = (promptLen + _cursorIndex) % width;
 
         // Leapfrog move up
-        int linesToMoveUp = (totalInputLines - cursorLine) + 2;
+        int linesToMoveUp = (totalInputLines - cursorLine) + 2 + menuHeight;
         for (int i = 0; i < linesToMoveUp; i++) sb.Append("\x1b[A");
         
         // Final Horizontal Positioning & Show Cursor
@@ -399,5 +566,47 @@ public class InputBar
         // Update state for the next frame
         _lastInputLines = totalInputLines;
         _lastCursorLine = cursorLine;
+        _lastMenuHeight = menuHeight;
+    }
+
+    private bool IsCommandAutocompleteActive()
+    {
+        // Do not show autocomplete dropdown while browsing history
+        if (_historyIndex != -1) return false;
+
+        // Active if input starts with '/' and there are no spaces up to the cursor
+        string textBeforeCursor = _input.ToString(0, _cursorIndex);
+        return textBeforeCursor.StartsWith('/') && !textBeforeCursor.Contains(' ');
+    }
+
+    private List<ISlashCommand> GetActiveMatches()
+    {
+        if (!IsCommandAutocompleteActive())
+        {
+            return new List<ISlashCommand>();
+        }
+
+        string textBeforeCursor = _input.ToString(0, _cursorIndex);
+        string query = textBeforeCursor[1..];
+
+        // Maintain stable query while cycling through suggestions
+        if (_menuSelectionIndex != -1 && !string.IsNullOrEmpty(_savedQuery))
+        {
+            query = _savedQuery[1..];
+        }
+
+        return _registry.GetCommands()
+            .Where(c => c.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Name)
+            .ToList();
+    }
+
+    private void CommitAutocompleteSelection()
+    {
+        if (_menuSelectionIndex != -1)
+        {
+            _menuSelectionIndex = -1;
+            _savedQuery = string.Empty;
+        }
     }
 }

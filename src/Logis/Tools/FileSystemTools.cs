@@ -72,15 +72,8 @@ public class FileSystemTools
     {
         try
         {
-            // Normalize path for lookup in target files
-            string relativePath = path.Replace("/", "\\").TrimStart('\\');
-            if (_targetFiles.Contains(relativePath))
-            {
-                return $"Error: You already have the content of '{relativePath}' in your message history. DO NOT use ReadFile on target files. Propose your changes using SEARCH/REPLACE blocks now.";
-            }
-
             string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));
-
+            
             // Path Sandboxing: Prevent escaping the workspace root
             if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
             {
@@ -93,6 +86,14 @@ public class FileSystemTools
             }
 
             var fileInfo = new FileInfo(fullPath);
+
+            // Normalize path for lookup in target files
+            string relativePath = path.Replace("/", "\\").TrimStart('\\');
+            // Only block ReadFile if the file is in focus AND contains actual content (size > 0)
+            if (_targetFiles.Contains(relativePath) && fileInfo.Length > 0)
+            {
+                return $"Error: You already have the content of '{relativePath}' in your message history. DO NOT use ReadFile on target files. Propose your changes using SEARCH/REPLACE blocks now.";
+            }
             
             // Size Limit: Prevent context overflow or large memory usage
             if (fileInfo.Length > MaxFileSizeBytes)

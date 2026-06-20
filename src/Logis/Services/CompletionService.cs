@@ -97,6 +97,14 @@ public class CompletionService
         while (iterations < options.MaxToolIterations)
         {
             iterations++;
+
+            // Dynamic Prompt Sync: If the state or focused files changed during tool execution,
+            // we refresh the system messages so the model gets the updated skill instructions
+            // and workspace context.
+            string currentSkill = skillService.GetSkill(session.State, options.EditFormat, session.Context.FocusedFiles);
+            string currentWorkspaceContext = await contextService.AssembleContextAsync(session, cancellationToken);
+            promptMessages[0] = new ChatMessage(ChatRole.System, currentSkill);
+            promptMessages[1] = new ChatMessage(ChatRole.System, currentWorkspaceContext);
             
             lastResponse = await chatClient.GetResponseAsync(promptMessages, chatOptions);
             
@@ -150,7 +158,10 @@ public class CompletionService
                             if (toolCall.Name == "CreateFile")
                             {
                                 AnsiConsole.MarkupLine($"[green]✔ Created empty file {filePath}[/]");
+                                session.State = SessionState.Edit;
                             }
+
+                            session.TouchedFilesInTurn.Add(filePath);
 
                             if (!session.Context.FocusedFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                             {

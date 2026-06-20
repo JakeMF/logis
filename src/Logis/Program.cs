@@ -284,6 +284,7 @@ class Program
             while (!ct.IsCancellationRequested)
             {
                 string input = await inputBar.ReadLineAsync(ct);
+                session.TouchedFilesInTurn.Clear();
 
                 // 1. Slash Command Routing
                 if (registry.TryExecute(input, session)) continue;
@@ -336,7 +337,22 @@ class Program
                 if (session.State == SessionState.Edit)
                 {
                     var diffService = new DiffService();
-                    foreach (var relativePath in session.Context.FocusedFiles)
+                    var targets = session.Context.FocusedFiles.AsEnumerable();
+                    if (options.EditFormat == EditFormat.Whole && session.Context.FocusedFiles.Count > 1)
+                    {
+                        if (session.TouchedFilesInTurn.Count > 0)
+                        {
+                            targets = session.Context.FocusedFiles.Where(f => 
+                                session.TouchedFilesInTurn.Contains(f));
+                        }
+                        else
+                        {
+                            // Fallback: only target the most recently focused file to prevent overwriting all of them
+                            targets = new[] { session.Context.FocusedFiles.Last() };
+                        }
+                    }
+
+                    foreach (var relativePath in targets)
                     {
                         string fullPath = Path.Combine(session.Context.WorkspaceRoot, relativePath);
                         if (!File.Exists(fullPath)) continue;

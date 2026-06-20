@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Logis.Tools;
 
 /// <summary>
-/// Provides read-only file system operations for the AI model.
+/// Provides file system operations for the AI model, including reading and creating files.
 /// </summary>
 public class FileSystemTools
 {
@@ -101,6 +101,49 @@ public class FileSystemTools
             }
 
             return await File.ReadAllTextAsync(fullPath, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Return error to model instead of throwing to allow self-correction
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Creates a new empty file at the specified path, ensuring parent directories exist.
+    /// </summary>
+    /// <param name="path">The relative path to the file to create.</param>
+    /// <returns>A success message, or an error message if the file already exists or access is denied.</returns>
+    [Description("Creates a new empty file at the specified path.")]
+    public string CreateFile(
+        [Description("The relative path to the file to create.")] string path)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, path));
+
+            // Path Sandboxing: Prevent escaping the workspace root
+            if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Error: Access denied. You can only create files within the workspace.";
+            }
+
+            if (File.Exists(fullPath))
+            {
+                return $"Error: File '{path}' already exists.";
+            }
+
+            // Ensure parent directories exist
+            string? directoryPath = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
+            {
+                Directory.CreateDirectory(directoryPath);
+            }
+
+            // Create the empty file
+            File.WriteAllText(fullPath, string.Empty);
+
+            return $"Success: Created empty file '{path}'. It has been added to focused files. In the next turn, you can transition to EDIT state and propose content for this file.";
         }
         catch (Exception ex)
         {

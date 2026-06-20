@@ -79,6 +79,7 @@ public class CompletionService
             // Explicit naming ensures consistency between the LLM toolbox and our tracking logic.
             functions.Add(AIFunctionFactory.Create(toolService.ListDirectory, new AIFunctionFactoryOptions { Name = "ListDirectory" }));
             functions.Add(AIFunctionFactory.Create(toolService.ReadFileAsync, new AIFunctionFactoryOptions { Name = "ReadFile" }));
+            functions.Add(AIFunctionFactory.Create(toolService.CreateFile, new AIFunctionFactoryOptions { Name = "CreateFile" }));
         }
 
         var chatOptions = new ChatOptions
@@ -138,14 +139,19 @@ public class CompletionService
                         object? result = await tool.InvokeAsync(new AIFunctionArguments(toolCall.Arguments));
                         string resultString = result?.ToString() ?? string.Empty;
 
-                        // Tool Authority Focus Tracking: Only focus files after a successful read.
-                        // We check for "ReadFile" which is the explicit name assigned in the factory.
-                        if (toolCall.Name == "ReadFile" && 
+                        // Tool Authority Focus Tracking: Only focus files after a successful read or create.
+                        // We check for "ReadFile" and "CreateFile" which are the explicit names assigned in the factory.
+                        if ((toolCall.Name == "ReadFile" || toolCall.Name == "CreateFile") && 
                             !resultString.StartsWith("Error:") && 
                             toolCall.Arguments is { } args && 
                             args.TryGetValue("path", out var pathObj) && 
                             pathObj?.ToString() is string filePath)
                         {
+                            if (toolCall.Name == "CreateFile")
+                            {
+                                AnsiConsole.MarkupLine($"[green]✔ Created empty file {filePath}[/]");
+                            }
+
                             if (!session.Context.FocusedFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                             {
                                 session.Context.FocusedFiles.Add(filePath);

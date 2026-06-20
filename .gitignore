@@ -16,6 +16,7 @@ logs/
 # Coding Agents
 GEMINI.md
 .aider*
+.agents*
 
 # Documentation (as per existing)
 .docs*

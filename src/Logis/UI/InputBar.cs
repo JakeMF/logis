@@ -87,9 +87,33 @@ public class InputBar
                 string result = _input.ToString();
                 if (string.IsNullOrWhiteSpace(result)) continue;
 
-                // Move cursor to the end of the line and down past the status line before returning
-                Console.SetCursorPosition(0, Console.CursorTop + 1);
-                Console.WriteLine();
+                // Clear the UI block (separator, input line, spacer, status line) and print final input in default colors
+                int totalLines = _lastInputLines + 4;
+                int linesUp = _lastCursorLine + 1;
+                int width = 80;
+                try { width = Console.WindowWidth; } catch {}
+                if (width <= 0) width = 80;
+
+                var clearSb = new StringBuilder();
+                clearSb.Append("\x1b[?25l"); // Hide cursor
+                
+                // Move up to the separator line
+                for (int i = 0; i < linesUp; i++) clearSb.Append("\x1b[A");
+                
+                // Clear all lines of the UI block
+                for (int i = 0; i < totalLines; i++)
+                {
+                    clearSb.Append("\r" + new string(' ', width) + "\n");
+                }
+                
+                // Move back up to the top of the cleared block
+                for (int i = 0; i < totalLines; i++) clearSb.Append("\x1b[A");
+                
+                clearSb.Append("\x1b[?25h"); // Show cursor
+                Console.Write(clearSb.ToString());
+
+                Console.Write("> ");
+                Console.WriteLine(result);
                 
                 // Add to history if unique
                 if (_history.Count == 0 || _history[^1] != result)

@@ -29,6 +29,7 @@ public class SkillService
 Explore the workspace to understand the relevant code and architecture. 
 - Use 'ListDirectory' to find files.
 - Use 'ReadFile' to understand file contents.
+- Use 'CreateFile' to create a new empty file if you need to add a new file.
 - Do NOT propose edits yet; your goal is to gather sufficient context.
 - When you have a solid understanding, summarize your findings and wait for instructions.";
     }

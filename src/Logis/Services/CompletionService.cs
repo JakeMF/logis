@@ -79,6 +79,7 @@ public class CompletionService
             // Explicit naming ensures consistency between the LLM toolbox and our tracking logic.
             functions.Add(AIFunctionFactory.Create(toolService.ListDirectory, new AIFunctionFactoryOptions { Name = "ListDirectory" }));
             functions.Add(AIFunctionFactory.Create(toolService.ReadFileAsync, new AIFunctionFactoryOptions { Name = "ReadFile" }));
+            functions.Add(AIFunctionFactory.Create(toolService.CreateFile, new AIFunctionFactoryOptions { Name = "CreateFile" }));
         }
 
         var chatOptions = new ChatOptions
@@ -96,6 +97,14 @@ public class CompletionService
         while (iterations < options.MaxToolIterations)
         {
             iterations++;
+
+            // Dynamic Prompt Sync: If the state or focused files changed during tool execution,
+            // we refresh the system messages so the model gets the updated skill instructions
+            // and workspace context.
+            string currentSkill = skillService.GetSkill(session.State, options.EditFormat, session.Context.FocusedFiles);
+            string currentWorkspaceContext = await contextService.AssembleContextAsync(session, cancellationToken);
+            promptMessages[0] = new ChatMessage(ChatRole.System, currentSkill);
+            promptMessages[1] = new ChatMessage(ChatRole.System, currentWorkspaceContext);
             
             lastResponse = await chatClient.GetResponseAsync(promptMessages, chatOptions);
             
@@ -138,14 +147,22 @@ public class CompletionService
                         object? result = await tool.InvokeAsync(new AIFunctionArguments(toolCall.Arguments));
                         string resultString = result?.ToString() ?? string.Empty;
 
-                        // Tool Authority Focus Tracking: Only focus files after a successful read.
-                        // We check for "ReadFile" which is the explicit name assigned in the factory.
-                        if (toolCall.Name == "ReadFile" && 
+                        // Tool Authority Focus Tracking: Only focus files after a successful read or create.
+                        // We check for "ReadFile" and "CreateFile" which are the explicit names assigned in the factory.
+                        if ((toolCall.Name == "ReadFile" || toolCall.Name == "CreateFile") && 
                             !resultString.StartsWith("Error:") && 
                             toolCall.Arguments is { } args && 
                             args.TryGetValue("path", out var pathObj) && 
                             pathObj?.ToString() is string filePath)
                         {
+                            if (toolCall.Name == "CreateFile")
+                            {
+                                AnsiConsole.MarkupLine($"[green]✔ Created empty file {filePath}[/]");
+                                session.State = SessionState.Edit;
+                            }
+
+                            session.TouchedFilesInTurn.Add(filePath);
+
                             if (!session.Context.FocusedFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                             {
                                 session.Context.FocusedFiles.Add(filePath);

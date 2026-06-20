@@ -56,6 +56,12 @@ public class Session
     /// </summary>
     [JsonIgnore]
     public List<ChatMessage> History { get; } = new();
+
+    /// <summary>
+    /// Tracks files that were created or read in the current active turn.
+    /// </summary>
+    [JsonIgnore]
+    public HashSet<string> TouchedFilesInTurn { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>
